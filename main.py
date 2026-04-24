@@ -2271,7 +2271,7 @@ def register_handlers(dp):
 
         data = export_config_data(cid)
         if not data:
-            await message.reply(f"❌ Config #{cid} not found.", parse_mode='HTML')
+            await message.reply(f"<b>❌  NOT FOUND</b>\n\nConfig #{cid} doesn't exist.\nUse /configs to see available.", parse_mode='HTML')
             return
 
         cfg = get_config(cid)
@@ -4074,7 +4074,13 @@ def register_handlers(dp):
                 parse_mode='HTML'
             )
         else:
-            await message.reply("Use <code>/parallel on</code> or <code>/parallel off</code>", parse_mode='HTML')
+            await message.reply(
+                "<b>❌  INVALID OPTION</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                "Use <code>/parallel on</code> or <code>/parallel off</code>\n\n"
+                "<code>━━ H@0 ━━</code>",
+                parse_mode='HTML'
+            )
 
     @dp.message_handler(commands=['genkey'])
     async def cmd_genkey(message: Message):
@@ -5403,39 +5409,50 @@ async def checking_loop(bot, chat_id, crawler):
 async def main_loop():
     global crawler_instance
 
+    # ── Validate config ──
     BOT_TOKEN = TELEGRAM_BOT_TOKEN
     try:
         CHAT_ID = int(TELEGRAM_CHAT_ID) if TELEGRAM_CHAT_ID else 0
     except ValueError:
         CHAT_ID = 0
 
-    if not BOT_TOKEN or BOT_TOKEN == 'PASTE_YOUR_BOT_TOKEN_HERE' or CHAT_ID == 0:
-        logger.error("Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID — fill them in src/config.py")
+    if not BOT_TOKEN or BOT_TOKEN == 'PASTE_YOUR_BOT_TOKEN_HERE':
+        logger.error("❌ TELEGRAM_BOT_TOKEN not set — add it to config.py")
+        return
+    if CHAT_ID == 0:
+        logger.error("❌ TELEGRAM_CHAT_ID not set — add it to config.py")
         return
 
+    # ── Init bot + dispatcher ──
     bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher(bot)
     crawler = CCCrawler()
     crawler_instance = crawler
 
     register_handlers(dp)
+    logger.info("Handlers registered")
 
-    logger.info(f"Running initial proxy scrape + scrub... targeting {TARGET_LIVE} live proxies")
-    await full_scrape_and_scrub()
-    load_proxies()
+    # ── Proxy init ──
+    logger.info(f"Initial proxy scrub... target {TARGET_LIVE} live")
+    try:
+        await full_scrape_and_scrub()
+        load_proxies()
 
-    if is_proxy_enabled() and not has_custom_proxies():
-        retries = 0
-        while get_live_count() < TARGET_LIVE and retries < 5:
-            logger.warning(f"Only {get_live_count()}/{TARGET_LIVE} live proxies - scrubbing more (attempt {retries+1}/5)...")
-            await asyncio.sleep(10)
-            await full_scrape_and_scrub()
-            load_proxies()
-            retries += 1
-        if get_live_count() == 0:
-            logger.warning("No live proxies found after retries - continuing anyway, monitor will refill")
+        if is_proxy_enabled() and not has_custom_proxies():
+            for attempt in range(5):
+                if get_live_count() >= TARGET_LIVE:
+                    break
+                logger.warning(f"Proxy pool low: {get_live_count()}/{TARGET_LIVE} (attempt {attempt+1}/5)")
+                await asyncio.sleep(10)
+                await full_scrape_and_scrub()
+                load_proxies()
+            if get_live_count() == 0:
+                logger.warning("No live proxies — monitor will refill automatically")
+    except Exception as e:
+        logger.error(f"Proxy init error (non-fatal): {e}")
+        load_proxies()
 
-    logger.info(f"Live proxy pool ready: {get_live_count()}/{TARGET_LIVE} proxies available")
+    logger.info(f"Proxy pool ready: {get_live_count()}/{TARGET_LIVE}")
 
     async def _proxy_stats_callback(stats):
         clear_blacklist()
@@ -5490,21 +5507,19 @@ async def main_loop():
         except Exception:
             pass
 
+    # ── Background tasks ──
     asyncio.create_task(auto_scrub_loop(300, _proxy_stats_callback))
-    logger.info("Auto proxy scrub started (every 5min)")
-
     asyncio.create_task(proxy_pool_monitor(check_interval=30, refill_callback=_refill_callback))
-    logger.info(f"Proxy pool monitor started (refill when < {REFILL_THRESHOLD} live, target {TARGET_LIVE})")
+    logger.info(f"Background tasks started (scrub 5min, monitor 30s, refill < {REFILL_THRESHOLD})")
 
+    # ── Startup message ──
     try:
         active_cfg_startup = get_config(get_active_config_id()) or {}
-        startup_gt = active_cfg_startup.get("gate_type", "stripe").upper()
-        gate_icon = "🟢" if active_cfg_startup.get("enabled", False) else "🔴"
-        gate_label = "ON" if active_cfg_startup.get("enabled", False) else "OFF"
         ns = get_all_notify()
         n_live = "🟢" if ns['live'] else "🔴"
         n_dec = "🟢" if ns['decline'] else "🔴"
         n_err = "🟢" if ns['errors'] else "🔴"
+
         all_cfgs = get_all_configs()
         cfg_lines = ""
         for cid_s, cfg_s in all_cfgs.items():
@@ -5513,6 +5528,9 @@ async def main_loop():
             site_s = cfg_s.get("settings", {}).get("site_url", "Not set")[:35]
             cfg_lines += f"  #{cid_s} {en_s} {gt_s} · <code>{site_s}</code>\n"
 
+        proxy_icon = "🟢" if is_proxy_enabled() else "🔴"
+        proxy_src = "custom" if has_custom_proxies() else "live"
+
         startup_msg = (
             f"🚀 <b>H@0 CHECKER V6.0</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -5520,56 +5538,59 @@ async def main_loop():
             f"🔥 Mode: Direct 24/7 Auto\n\n"
             f"<b>🛡  GATES</b>\n"
             f"{cfg_lines}\n"
-            f"<b>🤖  AUTO FEATURES</b>\n"
-            f"🔍 Gate type auto-detect\n"
-            f"🔑 PK/Token auto-detect\n"
-            f"🌐 Proxy auto-scrub (5min)\n"
-            f"📊 Auto-refill below {REFILL_THRESHOLD} → {TARGET_LIVE}\n"
-            f"🧠 LSTM card gen (auto-retrain)\n"
-            f"🛡 Ban guard (3-strike)\n\n"
             f"<b>📊  STATUS</b>\n"
-            f"🌐 <code>{get_pool_size()}</code> {'custom' if has_custom_proxies() else 'live'} proxies {'🟢' if is_proxy_enabled() else '🔴'}\n"
+            f"🌐 <code>{get_pool_size()}</code> {proxy_src} proxies {proxy_icon}\n"
             f"📋 <code>{len(crawler.bins)}</code> BINs · 📂 <code>{len(crawler.cc_list)}</code> test cards\n"
             f"🔀 Parallel {'🟢' if is_parallel_enabled() else '🔴'}\n"
             f"🔔 {n_live} Live  {n_dec} Decline  {n_err} Errors\n\n"
-            f"📖 /help · /setupgate [url]\n\n"
+            f"<b>⚡  QUICK START</b>\n"
+            f"<code>/setupgate [url]</code> — auto-setup\n"
+            f"<code>/chk CC|MM|YY|CVV</code> — test card\n"
+            f"<code>/start</code> — begin checking\n"
+            f"<code>/help</code> — all commands\n\n"
             f"<code>━━ H@0 V6.0 ━━</code>"
         )
-        await bot.send_message(get_active_chat_id(), startup_msg, parse_mode='HTML')
-        logger.info("Startup message sent to channel")
+        await bot.send_message(get_active_chat_id(), startup_msg, parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🎛 Panel", callback_data="panel"),
+                 InlineKeyboardButton(text="📖 Help", callback_data="help")],
+                [InlineKeyboardButton(text="▶️ Start", callback_data="start_bot"),
+                 InlineKeyboardButton(text="🛡 Gate", callback_data="gate")]
+            ])
+        )
+        logger.info("Startup message sent")
     except Exception as e:
         logger.error(f"Startup message failed: {e}")
 
+    # ── Start checker + polling ──
     asyncio.create_task(checking_loop(bot, get_active_chat_id(), crawler))
-    logger.info("Checking loop started as background task")
+    logger.info("Checking loop started")
 
-    logger.info("Clearing old sessions before polling...")
     try:
         await bot.delete_webhook(drop_pending_updates=True)
-        logger.info("Webhook cleared, pending updates dropped")
+        logger.info("Webhook cleared")
     except Exception as e:
         logger.warning(f"Webhook clear failed (non-fatal): {e}")
 
-    await asyncio.sleep(3)
+    await asyncio.sleep(2)
 
-    logger.info("Starting Telegram command polling...")
-    max_poll_retries = 10
-    for poll_attempt in range(max_poll_retries):
+    logger.info("Starting polling...")
+    for attempt in range(10):
         try:
             await dp.start_polling(reset_webhook=True, timeout=30, relax=0.5)
             break
         except Exception as e:
             err_str = str(e).lower()
-            if "terminated by other" in err_str and poll_attempt < max_poll_retries - 1:
-                wait = min((poll_attempt + 1) * 3, 15)
-                logger.warning(f"Polling conflict (attempt {poll_attempt+1}/{max_poll_retries}) - another bot instance active, retrying in {wait}s...")
+            if "terminated by other" in err_str and attempt < 9:
+                wait = min((attempt + 1) * 3, 15)
+                logger.warning(f"Polling conflict ({attempt+1}/10) — retrying in {wait}s...")
                 try:
                     await bot.delete_webhook(drop_pending_updates=True)
                 except Exception:
                     pass
                 await asyncio.sleep(wait)
             else:
-                logger.error(f"Polling error: {e}")
+                logger.error(f"Polling failed: {e}")
                 break
 
 
@@ -5578,4 +5599,4 @@ if __name__ == '__main__':
     try:
         asyncio.run(main_loop())
     except KeyboardInterrupt:
-        logger.info("Bot stopped manually.")
+        logger.info("Bot stopped.")

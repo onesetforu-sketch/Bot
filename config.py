@@ -463,14 +463,23 @@ def extract_url_from_text(text):
 
 def parse_card_input(raw: str) -> str:
     """Normalize card input to CC|MM|YY|CVV format.
-    Accepts separators: | / : , space dash."""
+    Accepts separators: | / : , space."""
     s = raw.strip()
     if '|' in s:
         return s.replace(' ', '')
-    for sep in ['/', ':', ',', '-', ' ']:
+    for sep in ['/', ':', ',']:
         parts = [p.strip() for p in s.split(sep) if p.strip()]
-        if len(parts) >= 4:
-            return '|'.join(parts[:4])
+        if len(parts) == 4:
+            return '|'.join(parts)
+    # Space: handle "CC MM YY CVV" and "4111 1111 1111 1111 12 25 123"
+    parts = s.split()
+    if len(parts) == 4:
+        return '|'.join(parts)
+    if len(parts) >= 7:
+        for n in range(2, len(parts) - 2):
+            cc = ''.join(parts[:n])
+            if cc.isdigit() and 13 <= len(cc) <= 19 and len(parts) - n >= 3:
+                return f"{cc}|{'|'.join(parts[n:n+3])}"
     return s.replace(' ', '')
 
 
