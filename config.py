@@ -42,10 +42,10 @@ _DEFAULT_GATE = {
     "pub_key": "",
     "stripe_account": "",
     "donation_amount": "1.00",
-    "random_amount": False,
+    "random_amount": "false",
     "random_amount_min": "1.00",
     "random_amount_max": "5.00",
-    "hybrid_mode": False,
+    "hybrid_mode": "false",
 }
 
 _DEFAULT_BRAINTREE_GATE = {
@@ -54,7 +54,7 @@ _DEFAULT_BRAINTREE_GATE = {
     "checkout_path": "/checkout/onepage",
     "product_payload": "",
     "payment_method_id": "3",
-    "hybrid_mode": False,
+    "hybrid_mode": "false",
 }
 
 GATE_SETTINGS = {
@@ -484,7 +484,10 @@ def parse_card_input(raw: str) -> str:
 
 
 def get_gate_setting(gate_name, key, default=""):
-    return GATE_SETTINGS.get(gate_name, {}).get(key, default)
+    val = GATE_SETTINGS.get(gate_name, {}).get(key, default)
+    if isinstance(val, bool):
+        return str(val).lower()
+    return val
 
 
 def set_gate_setting(gate_name, key, value):

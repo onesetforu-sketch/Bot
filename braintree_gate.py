@@ -930,7 +930,7 @@ def check_braintree(cc, mes, ano, cvv, country_code="US"):
     if len(ano) == 2:
         ano = f"20{ano}"
 
-    hybrid_on = get_gate_setting("braintree", "hybrid_mode", False)
+    hybrid_on = str(get_gate_setting("braintree", "hybrid_mode", "false")).lower() == "true"
     if hybrid_on:
         try:
             return _check_hybrid_bt(cc, mes, ano, cvv, site_url, add_to_cart_path, checkout_path, product_payload, payment_method_id, country_code)

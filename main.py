@@ -1653,8 +1653,8 @@ def register_handlers(dp):
 
         if setting_key == 'randomamt':
             enabled = setting_value.lower() in ('on', 'true', '1', 'yes')
-            set_gate_setting("stripe", "random_amount", enabled)
-            set_config_setting(active_cid, "random_amount", enabled)
+            set_gate_setting("stripe", "random_amount", "true" if enabled else "false")
+            set_config_setting(active_cid, "random_amount", "true" if enabled else "false")
             icon = "🟢 ON" if enabled else "🔴 OFF"
             min_v = get_gate_setting("stripe", "random_amount_min", "1.00")
             max_v = get_gate_setting("stripe", "random_amount_max", "5.00")
@@ -1851,11 +1851,11 @@ def register_handlers(dp):
             active_cfg = get_config(get_active_config_id())
             gate_target = active_cfg.get('gate_type', 'stripe') if active_cfg else 'stripe'
 
-        current = get_gate_setting(gate_target, "hybrid_mode", False)
+        current = get_gate_setting(gate_target, "hybrid_mode", "false")
         gate_label = "Stripe" if gate_target == "stripe" else "Braintree"
 
         if toggle_val is not None:
-            set_gate_setting(gate_target, "hybrid_mode", toggle_val)
+            set_gate_setting(gate_target, "hybrid_mode", "true" if toggle_val else "false")
             icon = "🟢" if toggle_val else "🔴"
             if gate_target == "stripe":
                 detail = ("✅ Browser fingerprints active\n✅ Cookie persistence ON\n✅ Silence Auth bypass ON\n" if toggle_val else "Standard requests-only mode.\n")
@@ -1871,8 +1871,8 @@ def register_handlers(dp):
             )
             logger.info(f"Hybrid mode {gate_label} {'ON' if toggle_val else 'OFF'} by admin {message.from_user.id}")
         else:
-            stripe_h = get_gate_setting("stripe", "hybrid_mode", False)
-            bt_h = get_gate_setting("braintree", "hybrid_mode", False)
+            stripe_h = str(get_gate_setting("stripe", "hybrid_mode", "false")).lower() == "true"
+            bt_h = str(get_gate_setting("braintree", "hybrid_mode", "false")).lower() == "true"
             s_icon = "🟢" if stripe_h else "🔴"
             b_icon = "🟢" if bt_h else "🔴"
             await message.reply(
@@ -4492,9 +4492,9 @@ def register_handlers(dp):
 
         if setting_key == 'randomamt' and cfg_gt == 'stripe':
             enabled = setting_value.lower() in ('on', 'true', '1', 'yes')
-            set_config_setting(cid, "random_amount", enabled)
+            set_config_setting(cid, "random_amount", "true" if enabled else "false")
             if cid == get_active_config_id():
-                set_gate_setting("stripe", "random_amount", enabled)
+                set_gate_setting("stripe", "random_amount", "true" if enabled else "false")
             icon = "🟢 ON" if enabled else "🔴 OFF"
             s = get_config(cid)["settings"]
             min_v = s.get('random_amount_min', '1.00')

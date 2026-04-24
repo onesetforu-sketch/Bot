@@ -255,7 +255,7 @@ def get_rate_limiter():
 
 
 def _is_ban_signal(text):
-    text_lower = text.lower()
+    text_lower = str(text).lower()
     return any(sig in text_lower for sig in _BAN_SIGNALS)
 
 
@@ -312,7 +312,7 @@ _REFRESH_ERRORS = [
 
 
 def _is_refresh_error(msg):
-    msg_lower = msg.lower()
+    msg_lower = str(msg).lower()
     return any(err in msg_lower for err in _REFRESH_ERRORS)
 
 
@@ -987,9 +987,9 @@ def _parse_token_error(err):
     if not err:
         return "error", "Tokenization Failed"
 
-    msg = err.get("message", "") if isinstance(err, dict) else str(err)
-    code = err.get("code", "") if isinstance(err, dict) else ""
-    decline_code = err.get("decline_code", "") if isinstance(err, dict) else ""
+    msg = str(err.get("message", "")) if isinstance(err, dict) else str(err)
+    code = str(err.get("code", "")) if isinstance(err, dict) else ""
+    decline_code = str(err.get("decline_code", "")) if isinstance(err, dict) else ""
     msg_lower = msg.lower()
     check = f"{code} {decline_code} {msg_lower}"
 
@@ -1070,7 +1070,7 @@ def _parse_donation_result(res_text):
     if not res_text:
         return "error", "Empty response"
 
-    res_lower = res_text.lower()
+    res_lower = str(res_text).lower()
 
     if '"requires_action":true' in res_lower or '"requires_action": true' in res_lower:
         return "live", "3DS Required (Card Live)"
