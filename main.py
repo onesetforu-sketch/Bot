@@ -232,7 +232,7 @@ def _fmt_stripe_settings(settings, compact=False):
     site = settings.get('site_url', 'Not set')
     path = settings.get('donate_path', '/donate/')
     amount = settings.get('donation_amount', '1.00')
-    rnd_on = settings.get('random_amount', False)
+    rnd_on = str(settings.get('random_amount', 'false')).lower() == 'true'
     rnd_min = settings.get('random_amount_min', '1.00')
     rnd_max = settings.get('random_amount_max', '5.00')
     raw_key = settings.get('pub_key', '')
@@ -252,7 +252,7 @@ def _fmt_stripe_settings(settings, compact=False):
             f"📋  Campaign: {camp_display}\n"
         )
     rnd_icon = "🟢" if rnd_on else "🔴"
-    hybrid_on = settings.get('hybrid_mode', False)
+    hybrid_on = str(settings.get('hybrid_mode', 'false')).lower() == 'true'
     hybrid_icon = "🟢" if hybrid_on else "🔴"
     return (
         f"🌐  Site URL:\n"
@@ -272,7 +272,7 @@ def _fmt_braintree_settings(settings, compact=False):
     cart_path = settings.get('add_to_cart_path', '/orders/populate')
     checkout_path = settings.get('checkout_path', '/checkout/onepage')
     pay_method = settings.get('payment_method_id', '3')
-    hybrid = settings.get('hybrid_mode', False)
+    hybrid = str(settings.get('hybrid_mode', 'false')).lower() == 'true'
     h_icon = "🟢" if hybrid else "🔴"
     if compact:
         return (
