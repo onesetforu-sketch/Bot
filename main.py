@@ -14,8 +14,10 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 from aiohttp import ClientSession, ClientTimeout, TCPConnector
 from faker import Faker
-from aiogram import Bot, Dispatcher
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, InputFile, Message, CallbackQuery
+from aiogram import Bot, Dispatcher, F
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
+from aiogram.types.input_file import FSInputFile, BufferedInputFile
+from aiogram.filters import Command
 try:
     from keep_alive import live
 except ImportError:
@@ -938,7 +940,7 @@ async def _send_proxy_file_to_channel(chat_id):
 
         await bot.send_document(
             chat_id,
-            InputFile(proxy_file, filename=f"H0_proxies_live_{count}.txt"),
+            document=FSInputFile(proxy_file, filename=f"H0_proxies_live_{count}.txt"),
             caption=(
                 f"<b>🌐  LIVE PROXIES</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -955,10 +957,17 @@ async def _send_proxy_file_to_channel(chat_id):
         return False, str(e)[:60]
 
 
+def get_command_args(message: Message) -> str:
+    """v3-compatible replacement for message.get_args()."""
+    if message.text and ' ' in message.text:
+        return message.text.split(None, 1)[1]
+    return ""
+
+
 def register_handlers(dp):
     global crawler_instance
 
-    @dp.message_handler(commands=['help'])
+    @dp.message(Command('help'))
     async def cmd_help(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply(
@@ -1024,7 +1033,7 @@ def register_handlers(dp):
             ])
         )
 
-    @dp.message_handler(commands=['start'])
+    @dp.message(Command('start'))
     async def cmd_start(message: Message):
         global bot_running
         if not is_admin(message.from_user.id, message.from_user.username):
@@ -1062,7 +1071,7 @@ def register_handlers(dp):
             ])
         )
 
-    @dp.message_handler(commands=['stop'])
+    @dp.message(Command('stop'))
     async def cmd_stop(message: Message):
         global bot_running
         if not is_admin(message.from_user.id, message.from_user.username):
@@ -1096,14 +1105,14 @@ def register_handlers(dp):
             ])
         )
 
-    @dp.message_handler(commands=['stats'])
+    @dp.message(Command('stats'))
     async def cmd_stats(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
         await send_stats_to_channel(message.bot, message.chat.id)
 
-    @dp.message_handler(commands=['report'])
+    @dp.message(Command('report'))
     async def cmd_report(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
@@ -1127,8 +1136,8 @@ def register_handlers(dp):
                 lines = [l.strip() for l in f if l.strip()]
             count = len(lines)
 
-            await message.reply_document(
-                InputFile(approved_file, filename=f"H@0_approved_{count}cards.txt"),
+            await message.reply_document(document=
+                FSInputFile(approved_file, filename=f"H@0_approved_{count}cards.txt"),
                 caption=(
                     f"<b>📄  LIVE REPORT</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -1143,7 +1152,7 @@ def register_handlers(dp):
             logger.error(f"Report send error: {e}")
             await message.reply("<b>❌  SEND FAILED</b>\n\nCouldn't send report file.\nTry again or check /stats.", parse_mode='HTML')
 
-    @dp.message_handler(commands=['approved'])
+    @dp.message(Command('approved'))
     async def cmd_approved(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
@@ -1171,8 +1180,8 @@ def register_handlers(dp):
                 [InlineKeyboardButton(text=f"📥 Download ({count})", callback_data="approved")]
             ])
 
-            await message.reply_document(
-                InputFile(approved_file, filename=f"H@0_approved_{count}cards.txt"),
+            await message.reply_document(document=
+                FSInputFile(approved_file, filename=f"H@0_approved_{count}cards.txt"),
                 caption=(
                     f"<b>📄  APPROVED CARDS</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -1188,13 +1197,13 @@ def register_handlers(dp):
             logger.error(f"Approved send error: {e}")
             await message.reply("<b>❌  SEND FAILED</b>\n\nCouldn't send approved file.\nTry again.", parse_mode='HTML')
 
-    @dp.message_handler(commands=['setbin'])
+    @dp.message(Command('setbin'))
     async def cmd_setbin(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
 
-        args = message.get_args()
+        args = get_command_args(message)
         if not args:
             await message.reply(
                 "<b>🎯  SET BIN</b>\n"
@@ -1257,7 +1266,7 @@ def register_handlers(dp):
                 parse_mode='HTML'
             )
 
-    @dp.message_handler(commands=['msetbin'])
+    @dp.message(Command('msetbin'))
     async def cmd_msetbin(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
@@ -1267,7 +1276,7 @@ def register_handlers(dp):
         text_lines = raw_text.strip().splitlines()
         args_lines = text_lines[1:] if len(text_lines) > 1 else []
 
-        inline_args = message.get_args()
+        inline_args = get_command_args(message)
         if inline_args:
             args_lines = inline_args.strip().splitlines() + args_lines[len(inline_args.strip().splitlines()):]
 
@@ -1337,13 +1346,13 @@ def register_handlers(dp):
 
         await message.reply(result_msg, parse_mode='HTML')
 
-    @dp.message_handler(commands=['removebin'])
+    @dp.message(Command('removebin'))
     async def cmd_removebin(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
 
-        args = message.get_args()
+        args = get_command_args(message)
         if not args:
             await message.reply(
                 "<b>🗑  REMOVE BIN</b>\n"
@@ -1384,7 +1393,7 @@ def register_handlers(dp):
                 parse_mode='HTML'
             )
 
-    @dp.message_handler(commands=['bins'])
+    @dp.message(Command('bins'))
     async def cmd_bins(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
@@ -1425,7 +1434,7 @@ def register_handlers(dp):
             parse_mode='HTML'
         )
 
-    @dp.message_handler(commands=['sendbins'])
+    @dp.message(Command('sendbins'))
     async def cmd_sendbins(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
@@ -1445,8 +1454,8 @@ def register_handlers(dp):
 
         try:
             total = len(crawler_instance.bins) if crawler_instance else 0
-            await message.reply_document(
-                InputFile(bins_file, filename=f"H@0_bins_{total}.txt"),
+            await message.reply_document(document=
+                FSInputFile(bins_file, filename=f"H@0_bins_{total}.txt"),
                 caption=(
                     f"<b>📄  BINS FILE</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -1460,7 +1469,7 @@ def register_handlers(dp):
             logger.error(f"Bins file send error: {e}")
             await message.reply("<b>❌  SEND FAILED</b>\n\nCouldn't send bins file.\nTry again.", parse_mode='HTML')
 
-    @dp.message_handler(commands=['deletebins'])
+    @dp.message(Command('deletebins'))
     async def cmd_deletebins(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
@@ -1490,7 +1499,7 @@ def register_handlers(dp):
             parse_mode='HTML'
         )
 
-    @dp.message_handler(commands=['loadcc', 'reloadcc'])
+    @dp.message(Command('loadcc', 'reloadcc'))
     async def cmd_loadcc(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
@@ -1510,7 +1519,7 @@ def register_handlers(dp):
             parse_mode='HTML'
         )
 
-    @dp.message_handler(commands=['ccstatus'])
+    @dp.message(Command('ccstatus'))
     async def cmd_ccstatus(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
@@ -1532,7 +1541,7 @@ def register_handlers(dp):
             parse_mode='HTML'
         )
 
-    @dp.message_handler(commands=['gate'])
+    @dp.message(Command('gate'))
     async def cmd_gate(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
@@ -1578,7 +1587,7 @@ def register_handlers(dp):
             ])
         )
 
-    @dp.message_handler(commands=['setgate'])
+    @dp.message(Command('setgate'))
     async def cmd_setgate(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
@@ -1589,7 +1598,7 @@ def register_handlers(dp):
         current_gt = active_cfg.get("gate_type", "stripe")
         gt_label = "Braintree" if current_gt == "braintree" else "Stripe"
 
-        args = message.get_args()
+        args = get_command_args(message)
         if not args or ' ' not in args.strip():
             if current_gt == "braintree":
                 help_msg = (
@@ -1742,7 +1751,7 @@ def register_handlers(dp):
             ])
         )
 
-    @dp.message_handler(commands=['gateon'])
+    @dp.message(Command('gateon'))
     async def cmd_gateon(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
@@ -1779,7 +1788,7 @@ def register_handlers(dp):
             ])
         )
 
-    @dp.message_handler(commands=['gateoff'])
+    @dp.message(Command('gateoff'))
     async def cmd_gateoff(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
@@ -1816,13 +1825,13 @@ def register_handlers(dp):
             ])
         )
 
-    @dp.message_handler(commands=['hybrid'])
+    @dp.message(Command('hybrid'))
     async def cmd_hybrid(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Admin only.", parse_mode='HTML')
             return
 
-        args = message.get_args()
+        args = get_command_args(message)
         parts = args.strip().lower().split() if args else []
 
         gate_target = None
@@ -1885,13 +1894,13 @@ def register_handlers(dp):
                 parse_mode='HTML'
             )
 
-    @dp.message_handler(commands=['chk'])
+    @dp.message(Command('chk'))
     async def cmd_chk(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
 
-        args = message.get_args()
+        args = get_command_args(message)
         if not args:
             active_gt = get_config_gate_type(get_active_config_id())
             gate_label = "Braintree" if active_gt == "braintree" else "Stripe Charitable"
@@ -2023,7 +2032,7 @@ def register_handlers(dp):
     _mass_check_running = {}
     _mass_check_cancel = {}
 
-    @dp.message_handler(commands=['mycards'])
+    @dp.message(Command('mycards'))
     async def cmd_mycards(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
@@ -2050,8 +2059,8 @@ def register_handlers(dp):
         limit_str = f"{daily_used}/{limit}" if limit > 0 else f"{daily_used}/∞"
 
         try:
-            await message.reply_document(
-                InputFile(fpath, filename=f"my_lives_{count}cards.txt"),
+            await message.reply_document(document=
+                FSInputFile(fpath, filename=f"my_lives_{count}cards.txt"),
                 caption=(
                     f"<b>💳  MY LIVE CARDS</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -2065,7 +2074,7 @@ def register_handlers(dp):
             logger.error(f"mycards error: {e}")
             await message.reply("<b>❌  SEND FAILED</b>\n\nCouldn't send cards file.\nTry again.", parse_mode='HTML')
 
-    @dp.message_handler(commands=['myerrors'])
+    @dp.message(Command('myerrors'))
     async def cmd_myerrors(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
@@ -2086,8 +2095,8 @@ def register_handlers(dp):
         cards = get_user_cards(uid, "errors")
         count = len(cards)
         try:
-            await message.reply_document(
-                InputFile(fpath, filename=f"my_errors_{count}cards.txt"),
+            await message.reply_document(document=
+                FSInputFile(fpath, filename=f"my_errors_{count}cards.txt"),
                 caption=(
                     f"<b>⚠️  MY ERROR CARDS</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -2100,13 +2109,13 @@ def register_handlers(dp):
             logger.error(f"myerrors error: {e}")
             await message.reply("<b>❌  SEND FAILED</b>\n\nCouldn't send errors file.\nTry again.", parse_mode='HTML')
 
-    @dp.message_handler(commands=['setlimit'])
+    @dp.message(Command('setlimit'))
     async def cmd_setlimit(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Admin only.", parse_mode='HTML')
             return
 
-        args = message.get_args()
+        args = get_command_args(message)
         if not args:
             limits = get_all_user_limits()
             card_lim = limits['max_cards_per_user']
@@ -2191,13 +2200,13 @@ def register_handlers(dp):
         "hybrid_braintree.py": "hybridbt",
     }
 
-    @dp.message_handler(commands=['exportgate', 'downloadgate', 'getscript'])
+    @dp.message(Command('exportgate', 'downloadgate', 'getscript'))
     async def cmd_exportgate(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Admin only.", parse_mode='HTML')
             return
 
-        args = message.get_args()
+        args = get_command_args(message)
         if not args or args.strip().lower() not in _SCRIPT_FILES:
             script_list = ""
             for key, fname in _SCRIPT_FILES.items():
@@ -2238,8 +2247,8 @@ def register_handlers(dp):
             with open(fpath, 'r') as f:
                 line_count = sum(1 for _ in f)
 
-            await message.reply_document(
-                InputFile(fpath, filename=f"H0_{fname}"),
+            await message.reply_document(document=
+                FSInputFile(fpath, filename=f"H0_{fname}"),
                 caption=(
                     f"<b>📜  GATE SCRIPT EXPORTED</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -2257,13 +2266,13 @@ def register_handlers(dp):
             logger.error(f"Export gate script error: {e}")
             await message.reply(f"❌ Export failed: {str(e)[:60]}", parse_mode='HTML')
 
-    @dp.message_handler(commands=['exportcfg'])
+    @dp.message(Command('exportcfg'))
     async def cmd_exportcfg(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Admin only.", parse_mode='HTML')
             return
 
-        args = message.get_args()
+        args = get_command_args(message)
         if args and args.strip().isdigit():
             cid = int(args.strip())
         else:
@@ -2289,8 +2298,8 @@ def register_handlers(dp):
             for k, v in data.get("settings", {}).items():
                 settings_preview += f"  <code>{k}</code>: <code>{v}</code>\n"
 
-            await message.reply_document(
-                InputFile(filepath, filename=filename),
+            await message.reply_document(document=
+                FSInputFile(filepath, filename=filename),
                 caption=(
                     f"<b>📤  CONFIG EXPORTED</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -2312,7 +2321,7 @@ def register_handlers(dp):
             if os.path.exists(filepath):
                 os.remove(filepath)
 
-    @dp.message_handler(commands=['importcfg'])
+    @dp.message(Command('importcfg'))
     async def cmd_importcfg(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Admin only.", parse_mode='HTML')
@@ -2342,7 +2351,7 @@ def register_handlers(dp):
             await message.reply("❌ Only <code>.json</code> config files supported.", parse_mode='HTML')
             return
 
-        args = message.get_args()
+        args = get_command_args(message)
         target_id = None
         if args and args.strip().isdigit():
             target_id = int(args.strip())
@@ -2381,13 +2390,13 @@ def register_handlers(dp):
             logger.error(f"Import config error: {e}")
             await message.reply(f"❌ Import error: {str(e)[:60]}", parse_mode='HTML')
 
-    @dp.message_handler(commands=['masscheck'])
+    @dp.message(Command('masscheck'))
     async def cmd_masscheck(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
 
-        args = message.get_args()
+        args = get_command_args(message)
         if not args:
             ch_status = "🟢 ON" if get_notify("live") else "🔴 OFF"
             await message.reply(
@@ -2700,7 +2709,7 @@ def register_handlers(dp):
                                         if os.path.exists(PHOTO_PATH):
                                             await bot_inst.send_photo(
                                                 active_chat,
-                                                photo=InputFile(PHOTO_PATH),
+                                                photo=FSInputFile(PHOTO_PATH),
                                                 caption=live_message,
                                                 reply_markup=keyboard,
                                                 parse_mode='HTML'
@@ -2810,7 +2819,7 @@ def register_handlers(dp):
             _mass_check_running.pop(uid, None)
             _mass_check_cancel.pop(uid, None)
 
-    @dp.message_handler(content_types=['document'])
+    @dp.message(F.document)
     async def handle_document(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             return
@@ -2997,7 +3006,7 @@ def register_handlers(dp):
                 logger.error(f"Document handler error: {e}")
                 await message.reply(f"❌ Error reading file: {str(e)[:60]}", parse_mode='HTML')
 
-    @dp.message_handler(commands=['autofix'])
+    @dp.message(Command('autofix'))
     async def cmd_autofix(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
@@ -3090,13 +3099,13 @@ def register_handlers(dp):
                 ])
             )
 
-    @dp.message_handler(commands=['setupgate'])
+    @dp.message(Command('setupgate'))
     async def cmd_setupgate(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
 
-        args = message.get_args()
+        args = get_command_args(message)
         if not args:
             await message.reply(
                 "<b>⚡  QUICK GATE SETUP</b>\n"
@@ -3243,7 +3252,7 @@ def register_handlers(dp):
     def _panel_gate_details(settings, gate_type):
         return _fmt_gate_settings(settings, gate_type, compact=True)
 
-    @dp.message_handler(commands=['panel'])
+    @dp.message(Command('panel'))
     async def cmd_panel(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
@@ -3316,13 +3325,13 @@ def register_handlers(dp):
             ])
         )
 
-    @dp.message_handler(commands=['proxy'])
+    @dp.message(Command('proxy'))
     async def cmd_proxy(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
 
-        args = message.get_args()
+        args = get_command_args(message)
         if not args:
             enabled = is_proxy_enabled()
             icon = "🟢" if enabled else "🔴"
@@ -3405,13 +3414,13 @@ def register_handlers(dp):
                 parse_mode='HTML'
             )
 
-    @dp.message_handler(commands=['addproxy'])
+    @dp.message(Command('addproxy'))
     async def cmd_addproxy(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
 
-        args = message.get_args()
+        args = get_command_args(message)
         if not args:
             await message.reply(
                 "<b>🌐  ADD PROXY</b>\n"
@@ -3451,13 +3460,13 @@ def register_handlers(dp):
             parse_mode='HTML'
         )
 
-    @dp.message_handler(commands=['removeproxy'])
+    @dp.message(Command('removeproxy'))
     async def cmd_removeproxy(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
 
-        args = message.get_args()
+        args = get_command_args(message)
         if not args:
             await message.reply(
                 "<b>🌐  REMOVE PROXY</b>\n"
@@ -3489,7 +3498,7 @@ def register_handlers(dp):
                 parse_mode='HTML'
             )
 
-    @dp.message_handler(commands=['proxies'])
+    @dp.message(Command('proxies'))
     async def cmd_proxies(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
@@ -3528,7 +3537,7 @@ def register_handlers(dp):
             parse_mode='HTML'
         )
 
-    @dp.message_handler(commands=['clearproxies'])
+    @dp.message(Command('clearproxies'))
     async def cmd_clearproxies(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
@@ -3546,13 +3555,13 @@ def register_handlers(dp):
             parse_mode='HTML'
         )
 
-    @dp.message_handler(commands=['setchannel'])
+    @dp.message(Command('setchannel'))
     async def cmd_setchannel(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
 
-        args = message.get_args()
+        args = get_command_args(message)
         if not args:
             current = get_custom_chat_id()
             env_id = TELEGRAM_CHAT_ID
@@ -3604,13 +3613,13 @@ def register_handlers(dp):
                 parse_mode='HTML'
             )
 
-    @dp.message_handler(commands=['notify'])
+    @dp.message(Command('notify'))
     async def cmd_notify(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
 
-        args = message.get_args()
+        args = get_command_args(message)
         if not args:
             settings = get_all_notify()
             live_icon = "🟢" if settings['live'] else "🔴"
@@ -3682,7 +3691,7 @@ def register_handlers(dp):
             parse_mode='HTML'
         )
 
-    @dp.message_handler(commands=['sendproxies'])
+    @dp.message(Command('sendproxies'))
     async def cmd_sendproxies(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Admin only.", parse_mode='HTML')
@@ -3695,7 +3704,7 @@ def register_handlers(dp):
         else:
             await message.reply(f"❌ {msg}", parse_mode='HTML')
 
-    @dp.message_handler(commands=['configs'])
+    @dp.message(Command('configs'))
     async def cmd_configs(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
@@ -3753,12 +3762,12 @@ def register_handlers(dp):
             ])
         )
 
-    @dp.message_handler(commands=['newconfig'])
+    @dp.message(Command('newconfig'))
     async def cmd_newconfig(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
-        args = message.get_args() or ""
+        args = get_command_args(message) or ""
         parts = args.strip().split(None, 1)
         gate_type = "stripe"
         name = ""
@@ -3802,12 +3811,12 @@ def register_handlers(dp):
             parse_mode='HTML'
         )
 
-    @dp.message_handler(commands=['dupconfig'])
+    @dp.message(Command('dupconfig'))
     async def cmd_dupconfig(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
-        args = message.get_args()
+        args = get_command_args(message)
         if not args or not args.strip().isdigit():
             await message.reply(
                 "<b>📋  DUPLICATE CONFIG</b>\n"
@@ -3841,12 +3850,12 @@ def register_handlers(dp):
             parse_mode='HTML'
         )
 
-    @dp.message_handler(commands=['delconfig'])
+    @dp.message(Command('delconfig'))
     async def cmd_delconfig(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
-        args = message.get_args()
+        args = get_command_args(message)
         if not args or not args.strip().isdigit():
             await message.reply(
                 "<b>🗑  DELETE CONFIG</b>\n"
@@ -3877,12 +3886,12 @@ def register_handlers(dp):
             parse_mode='HTML'
         )
 
-    @dp.message_handler(commands=['switchconfig'])
+    @dp.message(Command('switchconfig'))
     async def cmd_switchconfig(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
-        args = message.get_args()
+        args = get_command_args(message)
         if not args or not args.strip().isdigit():
             await message.reply(
                 f"<code>/switchconfig [id]</code> · Active: <b>#{get_active_config_id()}</b>",
@@ -3904,12 +3913,12 @@ def register_handlers(dp):
         else:
             await message.reply(f"Config #{cid} not found. Use /configs")
 
-    @dp.message_handler(commands=['configon'])
+    @dp.message(Command('configon'))
     async def cmd_configon(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
-        args = message.get_args()
+        args = get_command_args(message)
         if not args or not args.strip().isdigit():
             await message.reply(
                 "<b>🟢  ENABLE CONFIG</b>\n"
@@ -3939,12 +3948,12 @@ def register_handlers(dp):
                 parse_mode='HTML'
             )
 
-    @dp.message_handler(commands=['configoff'])
+    @dp.message(Command('configoff'))
     async def cmd_configoff(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
-        args = message.get_args()
+        args = get_command_args(message)
         if not args or not args.strip().isdigit():
             await message.reply(
                 "<b>🔴  DISABLE CONFIG</b>\n"
@@ -3974,12 +3983,12 @@ def register_handlers(dp):
                 parse_mode='HTML'
             )
 
-    @dp.message_handler(commands=['renameconfig'])
+    @dp.message(Command('renameconfig'))
     async def cmd_renameconfig(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
-        args = message.get_args()
+        args = get_command_args(message)
         if not args or ' ' not in args.strip():
             await message.reply(
                 "<b>✏️  RENAME CONFIG</b>\n"
@@ -4017,12 +4026,12 @@ def register_handlers(dp):
                 parse_mode='HTML'
             )
 
-    @dp.message_handler(commands=['parallel'])
+    @dp.message(Command('parallel'))
     async def cmd_parallel(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
-        args = message.get_args()
+        args = get_command_args(message)
         if not args:
             enabled = is_parallel_enabled()
             p_icon = "🟢" if enabled else "🔴"
@@ -4082,12 +4091,12 @@ def register_handlers(dp):
                 parse_mode='HTML'
             )
 
-    @dp.message_handler(commands=['genkey'])
+    @dp.message(Command('genkey'))
     async def cmd_genkey(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
-        args = message.get_args()
+        args = get_command_args(message)
         if not args or not args.strip().isdigit():
             await message.reply(
                 "<b>🔑  GENERATE KEY</b>\n"
@@ -4125,7 +4134,7 @@ def register_handlers(dp):
             parse_mode='HTML'
         )
 
-    @dp.message_handler(commands=['keys'])
+    @dp.message(Command('keys'))
     async def cmd_keys(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
@@ -4168,12 +4177,12 @@ def register_handlers(dp):
             parse_mode='HTML'
         )
 
-    @dp.message_handler(commands=['revokekey'])
+    @dp.message(Command('revokekey'))
     async def cmd_revokekey(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
-        args = message.get_args()
+        args = get_command_args(message)
         if not args:
             await message.reply(
                 "<b>🗑  REVOKE KEY</b>\n"
@@ -4204,12 +4213,12 @@ def register_handlers(dp):
                 parse_mode='HTML'
             )
 
-    @dp.message_handler(commands=['addadmin'])
+    @dp.message(Command('addadmin'))
     async def cmd_addadmin(message: Message):
         if not is_owner(message.from_user.id):
             await message.reply("🔒 Owner only.", parse_mode='HTML')
             return
-        args = message.get_args()
+        args = get_command_args(message)
         if not args:
             await message.reply(
                 "<b>👤  ADD ADMIN</b>\n"
@@ -4236,12 +4245,12 @@ def register_handlers(dp):
         else:
             await message.reply(f"❌ {msg}", parse_mode='HTML')
 
-    @dp.message_handler(commands=['removeadmin'])
+    @dp.message(Command('removeadmin'))
     async def cmd_removeadmin(message: Message):
         if not is_owner(message.from_user.id):
             await message.reply("🔒 Owner only.", parse_mode='HTML')
             return
-        args = message.get_args()
+        args = get_command_args(message)
         if not args:
             await message.reply(
                 "<b>🗑  REMOVE ADMIN</b>\n"
@@ -4270,7 +4279,7 @@ def register_handlers(dp):
                 parse_mode='HTML'
             )
 
-    @dp.message_handler(commands=['admins'])
+    @dp.message(Command('admins'))
     async def cmd_admins(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
@@ -4295,9 +4304,9 @@ def register_handlers(dp):
             parse_mode='HTML'
         )
 
-    @dp.message_handler(commands=['redeem'])
+    @dp.message(Command('redeem'))
     async def cmd_redeem(message: Message):
-        args = message.get_args()
+        args = get_command_args(message)
         if not args:
             await message.reply(
                 "<b>🎫  REDEEM KEY</b>\n"
@@ -4333,12 +4342,12 @@ def register_handlers(dp):
                 parse_mode='HTML'
             )
 
-    @dp.message_handler(commands=['editconfig'])
+    @dp.message(Command('editconfig'))
     async def cmd_editconfig(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
-        args = message.get_args()
+        args = get_command_args(message)
         if not args or not args.strip().split()[0].isdigit():
             await message.reply(
                 "<b>📝  EDIT CONFIG</b>\n"
@@ -4424,12 +4433,12 @@ def register_handlers(dp):
             reply_markup=InlineKeyboardMarkup(inline_keyboard=config_buttons)
         )
 
-    @dp.message_handler(commands=['setconfig'])
+    @dp.message(Command('setconfig'))
     async def cmd_setconfig(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
-        args = message.get_args()
+        args = get_command_args(message)
         if not args:
             await message.reply(
                 "<b>⚙️  SET CONFIG</b>\n"
@@ -4557,12 +4566,12 @@ def register_handlers(dp):
             parse_mode='HTML'
         )
 
-    @dp.message_handler(commands=['setupconfig'])
+    @dp.message(Command('setupconfig'))
     async def cmd_setupconfig(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
-        args = message.get_args()
+        args = get_command_args(message)
         if not args:
             await message.reply(
                 "<b>⚡  SETUP CONFIG</b>\n"
@@ -4693,12 +4702,12 @@ def register_handlers(dp):
         finally:
             set_active_config(prev_active)
 
-    @dp.message_handler(commands=['fixconfig'])
+    @dp.message(Command('fixconfig'))
     async def cmd_fixconfig(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
-        args = message.get_args()
+        args = get_command_args(message)
         if not args or not args.strip().isdigit():
             await message.reply(
                 "<b>🔧  FIX CONFIG</b>\n"
@@ -4785,7 +4794,7 @@ def register_handlers(dp):
         finally:
             set_active_config(prev_active)
 
-    @dp.callback_query_handler()
+    @dp.callback_query(lambda c: c.data and not c.data.startswith("autosetup_") and c.data != "dismiss_autosetup")
     async def handle_callbacks(callback: CallbackQuery):
         user_id = callback.from_user.id
         username = callback.from_user.username
@@ -4800,12 +4809,13 @@ def register_handlers(dp):
                 self.bot = cb.bot
                 self.message_id = cb.message.message_id
                 self._text = ""
-            def get_args(self):
-                return ""
+            @property
+            def text(self):
+                return self._text
             async def reply(self, text, **kwargs):
                 await self.bot.send_message(self.chat.id, text, **kwargs)
-            async def reply_document(self, doc, **kwargs):
-                await self.bot.send_document(self.chat.id, doc, **kwargs)
+            async def reply_document(self, document=None, **kwargs):
+                await self.bot.send_document(self.chat.id, document=document, **kwargs)
 
         fake_msg = FakeMessage(callback)
 
@@ -4994,9 +5004,12 @@ def register_handlers(dp):
             except Exception:
                 await callback.bot.send_message(callback.message.chat.id, "❌ Invalid config ID.", parse_mode='HTML')
 
-    @dp.message_handler(lambda message: message.text and not message.text.startswith('/') and message.text.strip())
+    @dp.message(F.text)
     async def handle_plain_text(message: Message):
         text = message.text.strip()
+
+        if text.startswith('/'):
+            return
 
         if '|' in text and any(c.isdigit() for c in text):
             return
@@ -5056,7 +5069,7 @@ def register_handlers(dp):
         except Exception as e:
             logger.debug(f"Auto-detect URL handler error: {e}")
 
-    @dp.callback_query_handler(lambda c: c.data and c.data.startswith("autosetup_"))
+    @dp.callback_query(F.data.startswith("autosetup_"))
     async def cb_autosetup(callback: CallbackQuery):
         if not is_authorized(callback.from_user.id, callback.from_user.username):
             await callback.answer("🔒 Access denied.")
@@ -5163,7 +5176,7 @@ def register_handlers(dp):
                 parse_mode='HTML'
             )
 
-    @dp.callback_query_handler(lambda c: c.data == "dismiss_autosetup")
+    @dp.callback_query(F.data == "dismiss_autosetup")
     async def cb_dismiss_autosetup(callback: CallbackQuery):
         try:
             await callback.message.delete()
@@ -5317,7 +5330,7 @@ async def checking_loop(bot, chat_id, crawler):
                                     if os.path.exists(PHOTO_PATH):
                                         await bot.send_photo(
                                             active_chat,
-                                            photo=InputFile(PHOTO_PATH),
+                                            photo=FSInputFile(PHOTO_PATH),
                                             caption=live_message,
                                             reply_markup=keyboard,
                                             parse_mode='HTML'
@@ -5425,7 +5438,7 @@ async def main_loop():
 
     # ── Init bot + dispatcher ──
     bot = Bot(token=BOT_TOKEN)
-    dp = Dispatcher(bot)
+    dp = Dispatcher()
     crawler = CCCrawler()
     crawler_instance = crawler
 
@@ -5577,7 +5590,7 @@ async def main_loop():
     logger.info("Starting polling...")
     for attempt in range(10):
         try:
-            await dp.start_polling(reset_webhook=True, timeout=30, relax=0.5)
+            await dp.start_polling(bot)
             break
         except Exception as e:
             err_str = str(e).lower()
