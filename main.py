@@ -8,6 +8,7 @@ import json
 import random
 import logging
 import re
+import html as _html
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -1668,7 +1669,7 @@ def register_handlers(dp):
                 await message.reply(
                     f"<b>❌  INVALID AMOUNT</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n\n"
-                    f"Got: <code>{setting_value}</code>\n"
+                    f"Got: <code>{_html.escape(str(setting_value))}</code>\n"
                     f"Must be a positive number.\n\n"
                     f"Example: <code>/setgate amount 1.00</code>\n\n"
                     f"<code>━━ H@0 ━━</code>",
@@ -1715,7 +1716,7 @@ def register_handlers(dp):
             await message.reply(
                 f"<b>❌  UNKNOWN SETTING</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n\n"
-                f"Got: <code>{setting_key}</code>\n"
+                f"Got: <code>{_html.escape(setting_key)}</code>\n"
                 f"Gate: <b>{gt_label}</b>\n\n"
                 f"Valid: <code>{valid_keys}</code>\n\n"
                 f"Use /setgate for full help.\n\n"
@@ -1917,7 +1918,7 @@ def register_handlers(dp):
             await message.reply(
                 "<b>❌  WRONG FORMAT</b>\n"
                 "━━━━━━━━━━━━━━━━━━━━\n\n"
-                f"Got: <code>{args.strip()[:40]}</code>\n\n"
+                f"Got: <code>{_html.escape(args.strip()[:40])}</code>\n\n"
                 "Use: <code>CC|MM|YY|CVV</code>\n"
                 "Also accepts <code>/</code> <code>:</code> or spaces.\n\n"
                 "<code>━━ H@0 ━━</code>",
@@ -2006,7 +2007,7 @@ def register_handlers(dp):
         except Exception as e:
             logger.error(f"Check command error: {e}")
             track_user_card(chk_uid, f"{card_str} | {str(e)[:60]}", "error")
-            err_msg = str(e)[:80]
+            err_msg = _html.escape(str(e)[:80])
             await message.reply(
                 f"<b>⚠️  CHECK ERROR</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n\n"
