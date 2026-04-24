@@ -8,13 +8,16 @@ import json
 import random
 import logging
 import re
+import html as _html
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 from aiohttp import ClientSession, ClientTimeout, TCPConnector
 from faker import Faker
-from aiogram import Bot, Dispatcher
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, InputFile, Message, CallbackQuery
+from aiogram import Bot, Dispatcher, F
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
+from aiogram.types.input_file import FSInputFile, BufferedInputFile
+from aiogram.filters import Command
 try:
     from keep_alive import live
 except ImportError:
@@ -23,7 +26,7 @@ except ImportError:
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from proxy_scraper import full_scrape_and_scrub, auto_scrub_loop, get_scrub_stats, get_scrubbed_proxies, proxy_pool_monitor, get_live_count, remove_dead_proxy, get_proxy_latency, TARGET_LIVE, REFILL_THRESHOLD, MAX_WORKERS
-from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, ADMIN_CODE, TELEGRAM_ADMIN, STRIPE_PUB_KEY, get_proxy_dict, load_proxies, get_proxy_stats, get_pool_size, blacklist_proxy, clear_blacklist, set_gate_setting, get_all_gate_settings, is_gate_enabled, set_gate_enabled, get_notify, set_notify, get_all_notify, set_custom_chat_id, get_custom_chat_id, is_proxy_enabled, set_proxy_enabled, add_custom_proxy, remove_custom_proxy, get_custom_proxies, clear_custom_proxies, has_custom_proxies, get_config, get_all_configs, get_active_config_id, set_active_config, create_config, duplicate_config, delete_config, enable_config, disable_config, set_config_setting, set_config_name, get_config_stats, update_config_stats, get_enabled_configs, is_parallel_enabled, set_parallel_enabled, config_count, generate_redeem_key, redeem_key, get_all_redeem_keys, revoke_redeem_key, is_user_redeemed, cleanup_expired_keys, add_admin, remove_admin, get_all_admins, is_extra_admin, get_config_gate_type, set_config_gate_type, get_gate_setting, track_user_card, get_user_cards, get_user_card_file, clear_user_cards, get_user_check_count, increment_user_check_count, check_user_card_limit, get_user_limit, set_user_limit, get_all_user_limits, export_config_data, import_config_data, normalize_url, extract_url_from_text
+from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, ADMIN_CODE, TELEGRAM_ADMIN, STRIPE_PUB_KEY, get_proxy_dict, load_proxies, get_proxy_stats, get_pool_size, blacklist_proxy, clear_blacklist, set_gate_setting, get_all_gate_settings, is_gate_enabled, set_gate_enabled, get_notify, set_notify, get_all_notify, set_custom_chat_id, get_custom_chat_id, is_proxy_enabled, set_proxy_enabled, add_custom_proxy, remove_custom_proxy, get_custom_proxies, clear_custom_proxies, has_custom_proxies, get_config, get_all_configs, get_active_config_id, set_active_config, create_config, duplicate_config, delete_config, enable_config, disable_config, set_config_setting, set_config_name, get_config_stats, update_config_stats, get_enabled_configs, is_parallel_enabled, set_parallel_enabled, config_count, generate_redeem_key, redeem_key, get_all_redeem_keys, revoke_redeem_key, is_user_redeemed, cleanup_expired_keys, add_admin, remove_admin, get_all_admins, is_extra_admin, get_config_gate_type, set_config_gate_type, get_gate_setting, track_user_card, get_user_cards, get_user_card_file, clear_user_cards, get_user_check_count, increment_user_check_count, check_user_card_limit, get_user_limit, set_user_limit, get_all_user_limits, export_config_data, import_config_data, normalize_url, extract_url_from_text, parse_card_input
 from stripe import get_rate_limiter, diagnose_gate, setup_gate_from_url, detect_gate_type
 from braintree_gate import check_braintree, setup_braintree_from_url
 from smart_gen import init_smart_gen, generate_card_lstm, generate_smart_batch, retrain as retrain_smart_gen
@@ -229,7 +232,7 @@ def _fmt_stripe_settings(settings, compact=False):
     site = settings.get('site_url', 'Not set')
     path = settings.get('donate_path', '/donate/')
     amount = settings.get('donation_amount', '1.00')
-    rnd_on = settings.get('random_amount', False)
+    rnd_on = str(settings.get('random_amount', 'false')).lower() == 'true'
     rnd_min = settings.get('random_amount_min', '1.00')
     rnd_max = settings.get('random_amount_max', '5.00')
     raw_key = settings.get('pub_key', '')
@@ -249,7 +252,7 @@ def _fmt_stripe_settings(settings, compact=False):
             f"📋  Campaign: {camp_display}\n"
         )
     rnd_icon = "🟢" if rnd_on else "🔴"
-    hybrid_on = settings.get('hybrid_mode', False)
+    hybrid_on = str(settings.get('hybrid_mode', 'false')).lower() == 'true'
     hybrid_icon = "🟢" if hybrid_on else "🔴"
     return (
         f"🌐  Site URL:\n"
@@ -269,7 +272,7 @@ def _fmt_braintree_settings(settings, compact=False):
     cart_path = settings.get('add_to_cart_path', '/orders/populate')
     checkout_path = settings.get('checkout_path', '/checkout/onepage')
     pay_method = settings.get('payment_method_id', '3')
-    hybrid = settings.get('hybrid_mode', False)
+    hybrid = str(settings.get('hybrid_mode', 'false')).lower() == 'true'
     h_icon = "🟢" if hybrid else "🔴"
     if compact:
         return (
@@ -937,7 +940,7 @@ async def _send_proxy_file_to_channel(chat_id):
 
         await bot.send_document(
             chat_id,
-            InputFile(proxy_file, filename=f"H0_proxies_live_{count}.txt"),
+            document=FSInputFile(proxy_file, filename=f"H0_proxies_live_{count}.txt"),
             caption=(
                 f"<b>🌐  LIVE PROXIES</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -954,13 +957,25 @@ async def _send_proxy_file_to_channel(chat_id):
         return False, str(e)[:60]
 
 
+def get_command_args(message: Message) -> str:
+    """v3-compatible replacement for message.get_args()."""
+    if message.text and ' ' in message.text:
+        return message.text.split(None, 1)[1]
+    return ""
+
+
 def register_handlers(dp):
     global crawler_instance
 
-    @dp.message_handler(commands=['help'])
+    @dp.message(Command('help'))
     async def cmd_help(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
-            await message.reply("🔒 Access denied. Use <code>/redeem [key]</code> to get access.", parse_mode='HTML')
+            await message.reply(
+                "🔒 <b>Access denied</b>\n\n"
+                "Use <code>/redeem [key]</code> to get access.\n"
+                "Ask an admin for a key.",
+                parse_mode='HTML'
+            )
             return
 
         gate_status = "🟢 ON" if is_gate_enabled("stripe") else "🔴 OFF"
@@ -971,61 +986,54 @@ def register_handlers(dp):
         n_dec = "🟢" if ns['decline'] else "🔴"
         n_err = "🟢" if ns['errors'] else "🔴"
 
+        active_cfg = get_config(get_active_config_id()) or {}
+        gt = active_cfg.get("gate_type", "stripe").upper()
+        site = active_cfg.get("settings", {}).get("site_url", "Not set")
+
         await message.reply(
             "📖 <b>H@0 COMMANDS</b>\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"🤖 {bot_status} · 🛡 {gate_status}\n"
+            f"🤖 {bot_status} · 🛡 {gt} {gate_status}\n"
+            f"🌐 <code>{site[:35]}</code>\n"
             f"🔔 {n_live} Live {n_dec} Decline {n_err} Errors\n\n"
-            "⚡ <b>CONTROL</b>\n"
-            "/start · /stop · /stats · /report\n\n"
+            "⚡ <b>QUICK START</b>\n"
+            "<code>/setupgate [url]</code> — auto-setup everything\n"
+            "<code>/chk CC|MM|YY|CVV</code> — test a card\n"
+            "<code>/start</code> / <code>/stop</code> — run checker\n"
+            "Or just paste a URL to auto-detect!\n\n"
             "🛡 <b>GATE</b>\n"
-            "/setupgate <code>[url]</code> · /gate · /setgate\n"
-            "/gateon · /gateoff · /chk <code>[cc]</code> · /autofix\n"
-            "/hybrid <code>[on|off]</code> — Playwright hybrid mode\n"
+            "/setupgate · /gate · /setgate · /autofix\n"
+            "/gateon · /gateoff · /chk · /hybrid\n"
             "/masscheck <code>[gate] [limit]</code>\n\n"
-            "🌐 <b>PROXY</b>\n"
-            "/proxy <code>[on|off]</code> · /addproxy <code>[ip:port]</code>\n"
-            "/removeproxy · /proxies · /clearproxies\n"
-            "/sendproxies — Send live proxies to channel\n\n"
-            "📡 <b>CHANNEL</b>\n"
-            "/setchannel · /notify · /panel\n\n"
             "🎯 <b>BIN</b>\n"
-            "/setbin <code>[bin]</code> · /msetbin · /removebin\n"
-            "/bins · /sendbins · /deletebins\n"
-            "/loadcc · /ccstatus\n\n"
+            "/setbin · /msetbin · /removebin · /bins\n\n"
+            "🌐 <b>PROXY</b>\n"
+            "/proxy · /addproxy · /proxies · /clearproxies\n\n"
             "⚙️ <b>CONFIGS</b>\n"
-            "/configs · /editconfig · /setconfig\n"
-            "/setupconfig · /fixconfig · /newconfig\n"
-            "/dupconfig · /delconfig · /switchconfig\n"
-            "/configon · /configoff · /parallel\n"
-            "/exportcfg <code>[id]</code> · /importcfg <code>[id]</code>\n\n"
-            "📜 <b>SCRIPTS</b>\n"
-            "/exportgate <code>[name]</code> — Download script\n"
-            "Send <code>.py</code> file — Auto-apply script\n\n"
-            "👤 <b>MY CARDS</b>\n"
-            "/mycards · /myerrors\n\n"
-            "🔑 <b>ACCESS</b>\n"
-            "/genkey · /keys · /revokekey · /redeem\n"
-            "/addadmin · /removeadmin · /admins\n"
-            "/setlimit <code>[cards|users] [num]</code>\n\n"
-            "🔑 Admin · 👑 Owner\n\n"
+            "/configs · /editconfig · /setupconfig\n"
+            "/newconfig · /dupconfig · /switchconfig\n"
+            "/exportcfg · /importcfg · /parallel\n\n"
+            "📡 /setchannel · /notify · /panel\n"
+            "👤 /mycards · /myerrors\n"
+            "🔑 /genkey · /keys · /redeem · /admins\n"
+            "📜 /exportgate · Send <code>.py</code> to apply\n\n"
             "<code>━━ H@0 ━━</code>",
             parse_mode='HTML',
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🎛 Panel", callback_data="panel"),
                  InlineKeyboardButton(text="📊 Stats", callback_data="stats")],
                 [InlineKeyboardButton(text="🛡 Gate", callback_data="gate"),
-                 InlineKeyboardButton(text="📋 BINs", callback_data="bins")],
-                [InlineKeyboardButton(text="🌐 Proxy", callback_data="proxy"),
                  InlineKeyboardButton(text="⚙️ Configs", callback_data="configs")],
                 [InlineKeyboardButton(text="▶️ Start", callback_data="start_bot"),
                  InlineKeyboardButton(text="⏹ Stop", callback_data="stop_bot")],
-                [InlineKeyboardButton(text="📄 Approved", callback_data="approved"),
+                [InlineKeyboardButton(text="📋 BINs", callback_data="bins"),
+                 InlineKeyboardButton(text="🌐 Proxy", callback_data="proxy")],
+                [InlineKeyboardButton(text="📄 Report", callback_data="approved"),
                  InlineKeyboardButton(text="🔑 Keys", callback_data="keys")]
             ])
         )
 
-    @dp.message_handler(commands=['start'])
+    @dp.message(Command('start'))
     async def cmd_start(message: Message):
         global bot_running
         if not is_admin(message.from_user.id, message.from_user.username):
@@ -1055,10 +1063,15 @@ def register_handlers(dp):
             f"🌐  <code>{get_pool_size()}</code> proxies in pool\n"
             f"📋  <code>{len(crawler_instance.bins) if crawler_instance else 0}</code> target BINs\n\n"
             "<code>━━ H@0 ━━</code>",
-            parse_mode='HTML'
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="⏹ Stop", callback_data="stop_bot"),
+                 InlineKeyboardButton(text="📊 Stats", callback_data="stats")],
+                [InlineKeyboardButton(text="🎛 Panel", callback_data="panel")]
+            ])
         )
 
-    @dp.message_handler(commands=['stop'])
+    @dp.message(Command('stop'))
     async def cmd_stop(message: Message):
         global bot_running
         if not is_admin(message.from_user.id, message.from_user.username):
@@ -1084,17 +1097,22 @@ def register_handlers(dp):
             "Checking is paused.\n"
             "Use /start to resume.\n\n"
             "<code>━━ H@0 ━━</code>",
-            parse_mode='HTML'
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="▶️ Start", callback_data="start_bot"),
+                 InlineKeyboardButton(text="📊 Stats", callback_data="stats")],
+                [InlineKeyboardButton(text="🎛 Panel", callback_data="panel")]
+            ])
         )
 
-    @dp.message_handler(commands=['stats'])
+    @dp.message(Command('stats'))
     async def cmd_stats(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
         await send_stats_to_channel(message.bot, message.chat.id)
 
-    @dp.message_handler(commands=['report'])
+    @dp.message(Command('report'))
     async def cmd_report(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
@@ -1118,8 +1136,8 @@ def register_handlers(dp):
                 lines = [l.strip() for l in f if l.strip()]
             count = len(lines)
 
-            await message.reply_document(
-                InputFile(approved_file, filename=f"H@0_approved_{count}cards.txt"),
+            await message.reply_document(document=
+                FSInputFile(approved_file, filename=f"H@0_approved_{count}cards.txt"),
                 caption=(
                     f"<b>📄  LIVE REPORT</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -1132,9 +1150,9 @@ def register_handlers(dp):
             logger.info(f"Report downloaded by admin {message.from_user.id} ({count} cards)")
         except Exception as e:
             logger.error(f"Report send error: {e}")
-            await message.reply("Error sending report. Try again.")
+            await message.reply("<b>❌  SEND FAILED</b>\n\nCouldn't send report file.\nTry again or check /stats.", parse_mode='HTML')
 
-    @dp.message_handler(commands=['approved'])
+    @dp.message(Command('approved'))
     async def cmd_approved(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
@@ -1162,8 +1180,8 @@ def register_handlers(dp):
                 [InlineKeyboardButton(text=f"📥 Download ({count})", callback_data="approved")]
             ])
 
-            await message.reply_document(
-                InputFile(approved_file, filename=f"H@0_approved_{count}cards.txt"),
+            await message.reply_document(document=
+                FSInputFile(approved_file, filename=f"H@0_approved_{count}cards.txt"),
                 caption=(
                     f"<b>📄  APPROVED CARDS</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -1177,15 +1195,15 @@ def register_handlers(dp):
             logger.info(f"Approved file downloaded by admin {message.from_user.id} ({count} cards)")
         except Exception as e:
             logger.error(f"Approved send error: {e}")
-            await message.reply("Error sending approved file. Try again.")
+            await message.reply("<b>❌  SEND FAILED</b>\n\nCouldn't send approved file.\nTry again.", parse_mode='HTML')
 
-    @dp.message_handler(commands=['setbin'])
+    @dp.message(Command('setbin'))
     async def cmd_setbin(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
 
-        args = message.get_args()
+        args = get_command_args(message)
         if not args:
             await message.reply(
                 "<b>🎯  SET BIN</b>\n"
@@ -1242,9 +1260,13 @@ def register_handlers(dp):
                     parse_mode='HTML'
                 )
         else:
-            await message.reply("Bot not initialized yet. Try again shortly.")
+            await message.reply(
+                "<b>⚠️  NOT READY</b>\n\n"
+                "Bot is still initializing.\nTry again in a moment.",
+                parse_mode='HTML'
+            )
 
-    @dp.message_handler(commands=['msetbin'])
+    @dp.message(Command('msetbin'))
     async def cmd_msetbin(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
@@ -1254,7 +1276,7 @@ def register_handlers(dp):
         text_lines = raw_text.strip().splitlines()
         args_lines = text_lines[1:] if len(text_lines) > 1 else []
 
-        inline_args = message.get_args()
+        inline_args = get_command_args(message)
         if inline_args:
             args_lines = inline_args.strip().splitlines() + args_lines[len(inline_args.strip().splitlines()):]
 
@@ -1278,7 +1300,11 @@ def register_handlers(dp):
             return
 
         if not crawler_instance:
-            await message.reply("Bot not initialized yet. Try again shortly.")
+            await message.reply(
+                "<b>⚠️  NOT READY</b>\n\n"
+                "Bot is still initializing.\nTry again in a moment.",
+                parse_mode='HTML'
+            )
             return
 
         lines = args_lines
@@ -1320,16 +1346,20 @@ def register_handlers(dp):
 
         await message.reply(result_msg, parse_mode='HTML')
 
-    @dp.message_handler(commands=['removebin'])
+    @dp.message(Command('removebin'))
     async def cmd_removebin(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
 
-        args = message.get_args()
+        args = get_command_args(message)
         if not args:
             await message.reply(
-                "Usage: <code>/removebin 524651</code>",
+                "<b>🗑  REMOVE BIN</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                "<code>/removebin 524651</code>\n\n"
+                "Use /bins to see current list.\n\n"
+                "<code>━━ H@0 ━━</code>",
                 parse_mode='HTML'
             )
             return
@@ -1343,19 +1373,27 @@ def register_handlers(dp):
                     f"<b>🗑  BIN REMOVED</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n\n"
                     f"Removed: <code>{normalize_bin(bin_input)}</code>\n"
-                    f"📊  Total BINs: <code>{total}</code>\n\n"
+                    f"📊  Remaining: <code>{total}</code> BINs\n\n"
                     f"<code>━━ H@0 ━━</code>",
                     parse_mode='HTML'
                 )
             else:
                 await message.reply(
-                    f"BIN <code>{normalize_bin(bin_input)}</code> not found in list.",
+                    f"<b>❌  NOT FOUND</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                    f"BIN <code>{normalize_bin(bin_input)}</code> not in list.\n"
+                    f"Use /bins to see loaded BINs.\n\n"
+                    f"<code>━━ H@0 ━━</code>",
                     parse_mode='HTML'
                 )
         else:
-            await message.reply("Bot not initialized yet. Try again shortly.")
+            await message.reply(
+                "<b>⚠️  NOT READY</b>\n\n"
+                "Bot is still initializing.\nTry again in a moment.",
+                parse_mode='HTML'
+            )
 
-    @dp.message_handler(commands=['bins'])
+    @dp.message(Command('bins'))
     async def cmd_bins(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
@@ -1396,7 +1434,7 @@ def register_handlers(dp):
             parse_mode='HTML'
         )
 
-    @dp.message_handler(commands=['sendbins'])
+    @dp.message(Command('sendbins'))
     async def cmd_sendbins(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
@@ -1416,8 +1454,8 @@ def register_handlers(dp):
 
         try:
             total = len(crawler_instance.bins) if crawler_instance else 0
-            await message.reply_document(
-                InputFile(bins_file, filename=f"H@0_bins_{total}.txt"),
+            await message.reply_document(document=
+                FSInputFile(bins_file, filename=f"H@0_bins_{total}.txt"),
                 caption=(
                     f"<b>📄  BINS FILE</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -1429,16 +1467,16 @@ def register_handlers(dp):
             logger.info(f"Bins file sent to admin {message.from_user.id}")
         except Exception as e:
             logger.error(f"Bins file send error: {e}")
-            await message.reply("Error sending bins file. Try again.")
+            await message.reply("<b>❌  SEND FAILED</b>\n\nCouldn't send bins file.\nTry again.", parse_mode='HTML')
 
-    @dp.message_handler(commands=['deletebins'])
+    @dp.message(Command('deletebins'))
     async def cmd_deletebins(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
 
         if not crawler_instance:
-            await message.reply("Bot not initialized yet. Try again shortly.")
+            await message.reply("<b>⚠️  NOT READY</b>\n\nBot is still initializing.\nTry again in a moment.", parse_mode='HTML')
             return
 
         old_count = len(crawler_instance.bins)
@@ -1461,13 +1499,13 @@ def register_handlers(dp):
             parse_mode='HTML'
         )
 
-    @dp.message_handler(commands=['loadcc', 'reloadcc'])
+    @dp.message(Command('loadcc', 'reloadcc'))
     async def cmd_loadcc(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
         if not crawler_instance:
-            await message.reply("Bot not initialized yet.")
+            await message.reply("<b>⚠️  NOT READY</b>\n\nBot is still initializing.\nTry again in a moment.", parse_mode='HTML')
             return
         count = crawler_instance.reload_cc_file()
         await message.reply(
@@ -1481,13 +1519,13 @@ def register_handlers(dp):
             parse_mode='HTML'
         )
 
-    @dp.message_handler(commands=['ccstatus'])
+    @dp.message(Command('ccstatus'))
     async def cmd_ccstatus(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
         if not crawler_instance:
-            await message.reply("Bot not initialized yet.")
+            await message.reply("<b>⚠️  NOT READY</b>\n\nBot is still initializing.\nTry again in a moment.", parse_mode='HTML')
             return
         total = len(crawler_instance.cc_list)
         await message.reply(
@@ -1503,7 +1541,7 @@ def register_handlers(dp):
             parse_mode='HTML'
         )
 
-    @dp.message_handler(commands=['gate'])
+    @dp.message(Command('gate'))
     async def cmd_gate(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
@@ -1549,7 +1587,7 @@ def register_handlers(dp):
             ])
         )
 
-    @dp.message_handler(commands=['setgate'])
+    @dp.message(Command('setgate'))
     async def cmd_setgate(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
@@ -1560,7 +1598,7 @@ def register_handlers(dp):
         current_gt = active_cfg.get("gate_type", "stripe")
         gt_label = "Braintree" if current_gt == "braintree" else "Stripe"
 
-        args = message.get_args()
+        args = get_command_args(message)
         if not args or ' ' not in args.strip():
             if current_gt == "braintree":
                 help_msg = (
@@ -1615,8 +1653,8 @@ def register_handlers(dp):
 
         if setting_key == 'randomamt':
             enabled = setting_value.lower() in ('on', 'true', '1', 'yes')
-            set_gate_setting("stripe", "random_amount", enabled)
-            set_config_setting(active_cid, "random_amount", enabled)
+            set_gate_setting("stripe", "random_amount", "true" if enabled else "false")
+            set_config_setting(active_cid, "random_amount", "true" if enabled else "false")
             icon = "🟢 ON" if enabled else "🔴 OFF"
             min_v = get_gate_setting("stripe", "random_amount_min", "1.00")
             max_v = get_gate_setting("stripe", "random_amount_max", "5.00")
@@ -1637,7 +1675,15 @@ def register_handlers(dp):
                 if val <= 0:
                     raise ValueError("Must be positive")
             except (ValueError, TypeError):
-                await message.reply(f"❌ Invalid amount: <code>{setting_value}</code>\nMust be a positive number (e.g. 1.00)", parse_mode='HTML')
+                await message.reply(
+                    f"<b>❌  INVALID AMOUNT</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                    f"Got: <code>{_html.escape(str(setting_value))}</code>\n"
+                    f"Must be a positive number.\n\n"
+                    f"Example: <code>/setgate amount 1.00</code>\n\n"
+                    f"<code>━━ H@0 ━━</code>",
+                    parse_mode='HTML'
+                )
                 return
             setting_value = f"{val:.2f}"
 
@@ -1677,10 +1723,13 @@ def register_handlers(dp):
         else:
             valid_keys = ', '.join(key_map.keys())
             await message.reply(
-                f"❌ Unknown setting: <code>{setting_key}</code>\n\n"
-                f"Active gate: <b>{gt_label}</b>\n"
-                f"Valid settings: <code>{valid_keys}</code>\n\n"
-                f"<i>Use /setgate to see all options</i>",
+                f"<b>❌  UNKNOWN SETTING</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"Got: <code>{_html.escape(setting_key)}</code>\n"
+                f"Gate: <b>{gt_label}</b>\n\n"
+                f"Valid: <code>{valid_keys}</code>\n\n"
+                f"Use /setgate for full help.\n\n"
+                f"<code>━━ H@0 ━━</code>",
                 parse_mode='HTML'
             )
             return
@@ -1693,13 +1742,16 @@ def register_handlers(dp):
             f"<b>✅  {gt_label.upper()} GATE UPDATED</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n\n"
             f"{display_name}:\n"
-            f"<code>{setting_value}</code>\n\n"
-            f"Use /gate to see full config.\n\n"
+            f"<code>{setting_value[:60]}</code>\n\n"
             f"<code>━━ H@0 ━━</code>",
-            parse_mode='HTML'
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🛡 Gate Info", callback_data="gate"),
+                 InlineKeyboardButton(text="🎛 Panel", callback_data="panel")]
+            ])
         )
 
-    @dp.message_handler(commands=['gateon'])
+    @dp.message(Command('gateon'))
     async def cmd_gateon(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
@@ -1728,10 +1780,15 @@ def register_handlers(dp):
             f"{gt_label} gate enabled.\n"
             "Cards will be checked.\n\n"
             "<code>━━ H@0 ━━</code>",
-            parse_mode='HTML'
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔴 Gate OFF", callback_data="gateoff"),
+                 InlineKeyboardButton(text="🛡 Gate Info", callback_data="gate")],
+                [InlineKeyboardButton(text="🎛 Panel", callback_data="panel")]
+            ])
         )
 
-    @dp.message_handler(commands=['gateoff'])
+    @dp.message(Command('gateoff'))
     async def cmd_gateoff(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
@@ -1758,19 +1815,23 @@ def register_handlers(dp):
             "<b>🔴  GATE OFF</b>\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
             f"{gt_label} gate disabled.\n"
-            "No cards will be checked.\n"
-            "Use /gateon to re-enable.\n\n"
+            "No cards will be checked.\n\n"
             "<code>━━ H@0 ━━</code>",
-            parse_mode='HTML'
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🟢 Gate ON", callback_data="gateon"),
+                 InlineKeyboardButton(text="🛡 Gate Info", callback_data="gate")],
+                [InlineKeyboardButton(text="🎛 Panel", callback_data="panel")]
+            ])
         )
 
-    @dp.message_handler(commands=['hybrid'])
+    @dp.message(Command('hybrid'))
     async def cmd_hybrid(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Admin only.", parse_mode='HTML')
             return
 
-        args = message.get_args()
+        args = get_command_args(message)
         parts = args.strip().lower().split() if args else []
 
         gate_target = None
@@ -1790,11 +1851,11 @@ def register_handlers(dp):
             active_cfg = get_config(get_active_config_id())
             gate_target = active_cfg.get('gate_type', 'stripe') if active_cfg else 'stripe'
 
-        current = get_gate_setting(gate_target, "hybrid_mode", False)
+        current = get_gate_setting(gate_target, "hybrid_mode", "false")
         gate_label = "Stripe" if gate_target == "stripe" else "Braintree"
 
         if toggle_val is not None:
-            set_gate_setting(gate_target, "hybrid_mode", toggle_val)
+            set_gate_setting(gate_target, "hybrid_mode", "true" if toggle_val else "false")
             icon = "🟢" if toggle_val else "🔴"
             if gate_target == "stripe":
                 detail = ("✅ Browser fingerprints active\n✅ Cookie persistence ON\n✅ Silence Auth bypass ON\n" if toggle_val else "Standard requests-only mode.\n")
@@ -1810,8 +1871,8 @@ def register_handlers(dp):
             )
             logger.info(f"Hybrid mode {gate_label} {'ON' if toggle_val else 'OFF'} by admin {message.from_user.id}")
         else:
-            stripe_h = get_gate_setting("stripe", "hybrid_mode", False)
-            bt_h = get_gate_setting("braintree", "hybrid_mode", False)
+            stripe_h = str(get_gate_setting("stripe", "hybrid_mode", "false")).lower() == "true"
+            bt_h = str(get_gate_setting("braintree", "hybrid_mode", "false")).lower() == "true"
             s_icon = "🟢" if stripe_h else "🔴"
             b_icon = "🟢" if bt_h else "🔴"
             await message.reply(
@@ -1833,36 +1894,43 @@ def register_handlers(dp):
                 parse_mode='HTML'
             )
 
-    @dp.message_handler(commands=['chk'])
+    @dp.message(Command('chk'))
     async def cmd_chk(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
 
-        args = message.get_args()
+        args = get_command_args(message)
         if not args:
             active_gt = get_config_gate_type(get_active_config_id())
             gate_label = "Braintree" if active_gt == "braintree" else "Stripe Charitable"
             await message.reply(
                 "<b>🔍  GATE CHECKER</b>\n"
                 "━━━━━━━━━━━━━━━━━━━━\n\n"
-                "\n<b>USAGE</b>\n"
+                f"Tests a card against <b>{gate_label}</b> gate.\n\n"
+                "<b>USAGE</b>\n"
                 "<code>/chk 4111111111111111|12|25|123</code>\n\n"
-                f"Tests a card against the\n"
-                f"current <b>{gate_label}</b> gate.\n"
-                "Use to verify gate is working.\n\n"
-                "\n<b>FORMAT</b>\n"
-                "<code>CC|MM|YY|CVV</code>\n\n"
+                "<b>ACCEPTED FORMATS</b>\n"
+                "<code>CC|MM|YY|CVV</code>\n"
+                "<code>CC/MM/YY/CVV</code>\n"
+                "<code>CC MM YY CVV</code>\n"
+                "<code>CC:MM:YY:CVV</code>\n\n"
                 "<code>━━ H@0 ━━</code>",
                 parse_mode='HTML'
             )
             return
 
-        card_str = args.strip().replace(' ', '')
+        card_str = parse_card_input(args)
+
         parts = card_str.split('|')
         if len(parts) < 4:
             await message.reply(
-                "❌ Invalid format. Use: <code>CC|MM|YY|CVV</code>",
+                "<b>❌  WRONG FORMAT</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"Got: <code>{_html.escape(args.strip()[:40])}</code>\n\n"
+                "Use: <code>CC|MM|YY|CVV</code>\n"
+                "Also accepts <code>/</code> <code>:</code> or spaces.\n\n"
+                "<code>━━ H@0 ━━</code>",
                 parse_mode='HTML'
             )
             return
@@ -1948,19 +2016,23 @@ def register_handlers(dp):
         except Exception as e:
             logger.error(f"Check command error: {e}")
             track_user_card(chk_uid, f"{card_str} | {str(e)[:60]}", "error")
+            err_msg = _html.escape(str(e)[:80])
             await message.reply(
                 f"<b>⚠️  CHECK ERROR</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n\n"
-                f"<code>{str(e)[:60]}</code>\n\n"
-                f"Try /autofix to diagnose.\n\n"
+                f"<code>{err_msg}</code>\n\n"
                 f"<code>━━ H@0 ━━</code>",
-                parse_mode='HTML'
+                parse_mode='HTML',
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🔧 Auto-Fix", callback_data="autofix"),
+                     InlineKeyboardButton(text="🛡 Gate Info", callback_data="gate")]
+                ])
             )
 
     _mass_check_running = {}
     _mass_check_cancel = {}
 
-    @dp.message_handler(commands=['mycards'])
+    @dp.message(Command('mycards'))
     async def cmd_mycards(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
@@ -1987,8 +2059,8 @@ def register_handlers(dp):
         limit_str = f"{daily_used}/{limit}" if limit > 0 else f"{daily_used}/∞"
 
         try:
-            await message.reply_document(
-                InputFile(fpath, filename=f"my_lives_{count}cards.txt"),
+            await message.reply_document(document=
+                FSInputFile(fpath, filename=f"my_lives_{count}cards.txt"),
                 caption=(
                     f"<b>💳  MY LIVE CARDS</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -2000,9 +2072,9 @@ def register_handlers(dp):
             )
         except Exception as e:
             logger.error(f"mycards error: {e}")
-            await message.reply("Error sending file. Try again.")
+            await message.reply("<b>❌  SEND FAILED</b>\n\nCouldn't send cards file.\nTry again.", parse_mode='HTML')
 
-    @dp.message_handler(commands=['myerrors'])
+    @dp.message(Command('myerrors'))
     async def cmd_myerrors(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
@@ -2023,8 +2095,8 @@ def register_handlers(dp):
         cards = get_user_cards(uid, "errors")
         count = len(cards)
         try:
-            await message.reply_document(
-                InputFile(fpath, filename=f"my_errors_{count}cards.txt"),
+            await message.reply_document(document=
+                FSInputFile(fpath, filename=f"my_errors_{count}cards.txt"),
                 caption=(
                     f"<b>⚠️  MY ERROR CARDS</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -2035,15 +2107,15 @@ def register_handlers(dp):
             )
         except Exception as e:
             logger.error(f"myerrors error: {e}")
-            await message.reply("Error sending file. Try again.")
+            await message.reply("<b>❌  SEND FAILED</b>\n\nCouldn't send errors file.\nTry again.", parse_mode='HTML')
 
-    @dp.message_handler(commands=['setlimit'])
+    @dp.message(Command('setlimit'))
     async def cmd_setlimit(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Admin only.", parse_mode='HTML')
             return
 
-        args = message.get_args()
+        args = get_command_args(message)
         if not args:
             limits = get_all_user_limits()
             card_lim = limits['max_cards_per_user']
@@ -2128,13 +2200,13 @@ def register_handlers(dp):
         "hybrid_braintree.py": "hybridbt",
     }
 
-    @dp.message_handler(commands=['exportgate', 'downloadgate', 'getscript'])
+    @dp.message(Command('exportgate', 'downloadgate', 'getscript'))
     async def cmd_exportgate(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Admin only.", parse_mode='HTML')
             return
 
-        args = message.get_args()
+        args = get_command_args(message)
         if not args or args.strip().lower() not in _SCRIPT_FILES:
             script_list = ""
             for key, fname in _SCRIPT_FILES.items():
@@ -2175,8 +2247,8 @@ def register_handlers(dp):
             with open(fpath, 'r') as f:
                 line_count = sum(1 for _ in f)
 
-            await message.reply_document(
-                InputFile(fpath, filename=f"H0_{fname}"),
+            await message.reply_document(document=
+                FSInputFile(fpath, filename=f"H0_{fname}"),
                 caption=(
                     f"<b>📜  GATE SCRIPT EXPORTED</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -2194,13 +2266,13 @@ def register_handlers(dp):
             logger.error(f"Export gate script error: {e}")
             await message.reply(f"❌ Export failed: {str(e)[:60]}", parse_mode='HTML')
 
-    @dp.message_handler(commands=['exportcfg'])
+    @dp.message(Command('exportcfg'))
     async def cmd_exportcfg(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Admin only.", parse_mode='HTML')
             return
 
-        args = message.get_args()
+        args = get_command_args(message)
         if args and args.strip().isdigit():
             cid = int(args.strip())
         else:
@@ -2208,7 +2280,7 @@ def register_handlers(dp):
 
         data = export_config_data(cid)
         if not data:
-            await message.reply(f"❌ Config #{cid} not found.", parse_mode='HTML')
+            await message.reply(f"<b>❌  NOT FOUND</b>\n\nConfig #{cid} doesn't exist.\nUse /configs to see available.", parse_mode='HTML')
             return
 
         cfg = get_config(cid)
@@ -2226,8 +2298,8 @@ def register_handlers(dp):
             for k, v in data.get("settings", {}).items():
                 settings_preview += f"  <code>{k}</code>: <code>{v}</code>\n"
 
-            await message.reply_document(
-                InputFile(filepath, filename=filename),
+            await message.reply_document(document=
+                FSInputFile(filepath, filename=filename),
                 caption=(
                     f"<b>📤  CONFIG EXPORTED</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -2249,7 +2321,7 @@ def register_handlers(dp):
             if os.path.exists(filepath):
                 os.remove(filepath)
 
-    @dp.message_handler(commands=['importcfg'])
+    @dp.message(Command('importcfg'))
     async def cmd_importcfg(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Admin only.", parse_mode='HTML')
@@ -2279,7 +2351,7 @@ def register_handlers(dp):
             await message.reply("❌ Only <code>.json</code> config files supported.", parse_mode='HTML')
             return
 
-        args = message.get_args()
+        args = get_command_args(message)
         target_id = None
         if args and args.strip().isdigit():
             target_id = int(args.strip())
@@ -2318,13 +2390,13 @@ def register_handlers(dp):
             logger.error(f"Import config error: {e}")
             await message.reply(f"❌ Import error: {str(e)[:60]}", parse_mode='HTML')
 
-    @dp.message_handler(commands=['masscheck'])
+    @dp.message(Command('masscheck'))
     async def cmd_masscheck(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
 
-        args = message.get_args()
+        args = get_command_args(message)
         if not args:
             ch_status = "🟢 ON" if get_notify("live") else "🔴 OFF"
             await message.reply(
@@ -2637,7 +2709,7 @@ def register_handlers(dp):
                                         if os.path.exists(PHOTO_PATH):
                                             await bot_inst.send_photo(
                                                 active_chat,
-                                                photo=InputFile(PHOTO_PATH),
+                                                photo=FSInputFile(PHOTO_PATH),
                                                 caption=live_message,
                                                 reply_markup=keyboard,
                                                 parse_mode='HTML'
@@ -2747,7 +2819,7 @@ def register_handlers(dp):
             _mass_check_running.pop(uid, None)
             _mass_check_cancel.pop(uid, None)
 
-    @dp.message_handler(content_types=['document'])
+    @dp.message(F.document)
     async def handle_document(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             return
@@ -2934,7 +3006,7 @@ def register_handlers(dp):
                 logger.error(f"Document handler error: {e}")
                 await message.reply(f"❌ Error reading file: {str(e)[:60]}", parse_mode='HTML')
 
-    @dp.message_handler(commands=['autofix'])
+    @dp.message(Command('autofix'))
     async def cmd_autofix(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
@@ -2980,19 +3052,29 @@ def register_handlers(dp):
 
             key_display = diag['stripe_key'] if diag['stripe_key'] else "Not found"
 
+            buttons = []
+            if all_ok:
+                buttons.append([InlineKeyboardButton(text="🟢 Gate ON", callback_data="gateon"),
+                                InlineKeyboardButton(text="📊 Stats", callback_data="stats")])
+            else:
+                buttons.append([InlineKeyboardButton(text="🔄 Re-run", callback_data="autofix"),
+                                InlineKeyboardButton(text="🛡 Gate Info", callback_data="gate")])
+            buttons.append([InlineKeyboardButton(text="🎛 Panel", callback_data="panel")])
+
             await message.reply(
                 f"<b>🔧  GATE DIAGNOSTIC</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n\n"
                 f"{overall}\n\n"
-                f"\n<b>CHECKS</b>\n"
+                f"<b>CHECKS</b>\n"
                 f"{checks_str}\n\n"
-                f"\n<b>DETAILS</b>\n"
+                f"<b>DETAILS</b>\n"
                 f"🌐  <code>{diag['site_url']}</code>\n"
                 f"📄  <code>{diag['donate_path']}</code>\n"
                 f"🔑  <code>{key_display}</code>\n"
                 f"{fixes_str}{errors_str}\n"
                 f"<code>━━ H@0 ━━</code>",
-                parse_mode='HTML'
+                parse_mode='HTML',
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
             )
 
             if all_ok and not is_gate_enabled("stripe"):
@@ -3007,18 +3089,23 @@ def register_handlers(dp):
             await message.reply(
                 f"<b>❌  DIAGNOSTIC FAILED</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n\n"
-                f"<code>{str(e)[:60]}</code>\n\n"
+                f"<code>{str(e)[:80]}</code>\n\n"
+                f"Check gate settings or try /setupgate.\n\n"
                 f"<code>━━ H@0 ━━</code>",
-                parse_mode='HTML'
+                parse_mode='HTML',
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🔄 Retry", callback_data="autofix"),
+                     InlineKeyboardButton(text="🛡 Gate", callback_data="gate")]
+                ])
             )
 
-    @dp.message_handler(commands=['setupgate'])
+    @dp.message(Command('setupgate'))
     async def cmd_setupgate(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
 
-        args = message.get_args()
+        args = get_command_args(message)
         if not args:
             await message.reply(
                 "<b>⚡  QUICK GATE SETUP</b>\n"
@@ -3165,7 +3252,7 @@ def register_handlers(dp):
     def _panel_gate_details(settings, gate_type):
         return _fmt_gate_settings(settings, gate_type, compact=True)
 
-    @dp.message_handler(commands=['panel'])
+    @dp.message(Command('panel'))
     async def cmd_panel(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
@@ -3233,17 +3320,18 @@ def register_handlers(dp):
                  InlineKeyboardButton(text="⚙️ Configs", callback_data="configs")],
                 [InlineKeyboardButton(text="🌐 Proxy", callback_data="proxy"),
                  InlineKeyboardButton(text="📄 Report", callback_data="approved")],
-                [InlineKeyboardButton(text="📖 Help", callback_data="help")]
+                [InlineKeyboardButton(text="🔧 AutoFix", callback_data="autofix"),
+                 InlineKeyboardButton(text="📖 Help", callback_data="help")]
             ])
         )
 
-    @dp.message_handler(commands=['proxy'])
+    @dp.message(Command('proxy'))
     async def cmd_proxy(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
 
-        args = message.get_args()
+        args = get_command_args(message)
         if not args:
             enabled = is_proxy_enabled()
             icon = "🟢" if enabled else "🔴"
@@ -3297,7 +3385,11 @@ def register_handlers(dp):
                 f"📊  Pool: <code>{get_pool_size()}</code> / <code>{TARGET_LIVE}</code>\n"
                 f"🔄  Workers: <code>{MAX_WORKERS}</code>\n\n"
                 "<code>━━ H@0 ━━</code>",
-                parse_mode='HTML'
+                parse_mode='HTML',
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🔴 Proxy OFF", callback_data="proxy_off"),
+                     InlineKeyboardButton(text="🎛 Panel", callback_data="panel")]
+                ])
             )
         elif toggle == 'off':
             set_proxy_enabled(False)
@@ -3307,7 +3399,11 @@ def register_handlers(dp):
                 "🔴  Proxies are <b>OFF</b>\n"
                 "All requests go <b>DIRECT</b>\n\n"
                 "<code>━━ H@0 ━━</code>",
-                parse_mode='HTML'
+                parse_mode='HTML',
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🟢 Proxy ON", callback_data="proxy_on"),
+                     InlineKeyboardButton(text="🎛 Panel", callback_data="panel")]
+                ])
             )
         else:
             await message.reply(
@@ -3318,13 +3414,13 @@ def register_handlers(dp):
                 parse_mode='HTML'
             )
 
-    @dp.message_handler(commands=['addproxy'])
+    @dp.message(Command('addproxy'))
     async def cmd_addproxy(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
 
-        args = message.get_args()
+        args = get_command_args(message)
         if not args:
             await message.reply(
                 "<b>🌐  ADD PROXY</b>\n"
@@ -3364,13 +3460,13 @@ def register_handlers(dp):
             parse_mode='HTML'
         )
 
-    @dp.message_handler(commands=['removeproxy'])
+    @dp.message(Command('removeproxy'))
     async def cmd_removeproxy(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
 
-        args = message.get_args()
+        args = get_command_args(message)
         if not args:
             await message.reply(
                 "<b>🌐  REMOVE PROXY</b>\n"
@@ -3402,7 +3498,7 @@ def register_handlers(dp):
                 parse_mode='HTML'
             )
 
-    @dp.message_handler(commands=['proxies'])
+    @dp.message(Command('proxies'))
     async def cmd_proxies(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
@@ -3441,7 +3537,7 @@ def register_handlers(dp):
             parse_mode='HTML'
         )
 
-    @dp.message_handler(commands=['clearproxies'])
+    @dp.message(Command('clearproxies'))
     async def cmd_clearproxies(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
@@ -3459,13 +3555,13 @@ def register_handlers(dp):
             parse_mode='HTML'
         )
 
-    @dp.message_handler(commands=['setchannel'])
+    @dp.message(Command('setchannel'))
     async def cmd_setchannel(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
 
-        args = message.get_args()
+        args = get_command_args(message)
         if not args:
             current = get_custom_chat_id()
             env_id = TELEGRAM_CHAT_ID
@@ -3517,13 +3613,13 @@ def register_handlers(dp):
                 parse_mode='HTML'
             )
 
-    @dp.message_handler(commands=['notify'])
+    @dp.message(Command('notify'))
     async def cmd_notify(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
 
-        args = message.get_args()
+        args = get_command_args(message)
         if not args:
             settings = get_all_notify()
             live_icon = "🟢" if settings['live'] else "🔴"
@@ -3595,7 +3691,7 @@ def register_handlers(dp):
             parse_mode='HTML'
         )
 
-    @dp.message_handler(commands=['sendproxies'])
+    @dp.message(Command('sendproxies'))
     async def cmd_sendproxies(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Admin only.", parse_mode='HTML')
@@ -3608,7 +3704,7 @@ def register_handlers(dp):
         else:
             await message.reply(f"❌ {msg}", parse_mode='HTML')
 
-    @dp.message_handler(commands=['configs'])
+    @dp.message(Command('configs'))
     async def cmd_configs(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
@@ -3666,12 +3762,12 @@ def register_handlers(dp):
             ])
         )
 
-    @dp.message_handler(commands=['newconfig'])
+    @dp.message(Command('newconfig'))
     async def cmd_newconfig(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
-        args = message.get_args() or ""
+        args = get_command_args(message) or ""
         parts = args.strip().split(None, 1)
         gate_type = "stripe"
         name = ""
@@ -3715,12 +3811,12 @@ def register_handlers(dp):
             parse_mode='HTML'
         )
 
-    @dp.message_handler(commands=['dupconfig'])
+    @dp.message(Command('dupconfig'))
     async def cmd_dupconfig(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
-        args = message.get_args()
+        args = get_command_args(message)
         if not args or not args.strip().isdigit():
             await message.reply(
                 "<b>📋  DUPLICATE CONFIG</b>\n"
@@ -3754,12 +3850,12 @@ def register_handlers(dp):
             parse_mode='HTML'
         )
 
-    @dp.message_handler(commands=['delconfig'])
+    @dp.message(Command('delconfig'))
     async def cmd_delconfig(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
-        args = message.get_args()
+        args = get_command_args(message)
         if not args or not args.strip().isdigit():
             await message.reply(
                 "<b>🗑  DELETE CONFIG</b>\n"
@@ -3790,12 +3886,12 @@ def register_handlers(dp):
             parse_mode='HTML'
         )
 
-    @dp.message_handler(commands=['switchconfig'])
+    @dp.message(Command('switchconfig'))
     async def cmd_switchconfig(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
-        args = message.get_args()
+        args = get_command_args(message)
         if not args or not args.strip().isdigit():
             await message.reply(
                 f"<code>/switchconfig [id]</code> · Active: <b>#{get_active_config_id()}</b>",
@@ -3817,14 +3913,21 @@ def register_handlers(dp):
         else:
             await message.reply(f"Config #{cid} not found. Use /configs")
 
-    @dp.message_handler(commands=['configon'])
+    @dp.message(Command('configon'))
     async def cmd_configon(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
-        args = message.get_args()
+        args = get_command_args(message)
         if not args or not args.strip().isdigit():
-            await message.reply("  <code>/configon [id]</code> · Enable a config", parse_mode='HTML')
+            await message.reply(
+                "<b>🟢  ENABLE CONFIG</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                "<code>/configon [id]</code>\n\n"
+                "Use /configs to see IDs.\n\n"
+                "<code>━━ H@0 ━━</code>",
+                parse_mode='HTML'
+            )
             return
         cid = int(args.strip())
         if enable_config(cid):
@@ -3838,16 +3941,28 @@ def register_handlers(dp):
                 parse_mode='HTML'
             )
         else:
-            await message.reply(f"Config #{cid} not found. Use /configs")
+            await message.reply(
+                f"<b>❌  NOT FOUND</b>\n\n"
+                f"Config #{cid} doesn't exist.\n"
+                f"Use /configs to see available.",
+                parse_mode='HTML'
+            )
 
-    @dp.message_handler(commands=['configoff'])
+    @dp.message(Command('configoff'))
     async def cmd_configoff(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
-        args = message.get_args()
+        args = get_command_args(message)
         if not args or not args.strip().isdigit():
-            await message.reply("  <code>/configoff [id]</code> · Disable a config", parse_mode='HTML')
+            await message.reply(
+                "<b>🔴  DISABLE CONFIG</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                "<code>/configoff [id]</code>\n\n"
+                "Use /configs to see IDs.\n\n"
+                "<code>━━ H@0 ━━</code>",
+                parse_mode='HTML'
+            )
             return
         cid = int(args.strip())
         if disable_config(cid):
@@ -3861,20 +3976,37 @@ def register_handlers(dp):
                 parse_mode='HTML'
             )
         else:
-            await message.reply(f"Config #{cid} not found. Use /configs")
+            await message.reply(
+                f"<b>❌  NOT FOUND</b>\n\n"
+                f"Config #{cid} doesn't exist.\n"
+                f"Use /configs to see available.",
+                parse_mode='HTML'
+            )
 
-    @dp.message_handler(commands=['renameconfig'])
+    @dp.message(Command('renameconfig'))
     async def cmd_renameconfig(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
-        args = message.get_args()
+        args = get_command_args(message)
         if not args or ' ' not in args.strip():
-            await message.reply("  <code>/renameconfig [id] [name]</code>", parse_mode='HTML')
+            await message.reply(
+                "<b>✏️  RENAME CONFIG</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                "<code>/renameconfig [id] [name]</code>\n\n"
+                "Example: <code>/renameconfig 1 My Stripe</code>\n\n"
+                "<code>━━ H@0 ━━</code>",
+                parse_mode='HTML'
+            )
             return
         parts = args.strip().split(None, 1)
         if not parts[0].isdigit():
-            await message.reply("First argument must be config ID number.")
+            await message.reply(
+                "<b>❌  INVALID ID</b>\n\n"
+                "First argument must be config ID.\n"
+                "Example: <code>/renameconfig 1 My Gate</code>",
+                parse_mode='HTML'
+            )
             return
         cid = int(parts[0])
         new_name = parts[1].strip() if len(parts) > 1 else ""
@@ -3887,14 +4019,19 @@ def register_handlers(dp):
                 parse_mode='HTML'
             )
         else:
-            await message.reply(f"Config #{cid} not found.")
+            await message.reply(
+                f"<b>❌  NOT FOUND</b>\n\n"
+                f"Config #{cid} doesn't exist.\n"
+                f"Use /configs to see available.",
+                parse_mode='HTML'
+            )
 
-    @dp.message_handler(commands=['parallel'])
+    @dp.message(Command('parallel'))
     async def cmd_parallel(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
-        args = message.get_args()
+        args = get_command_args(message)
         if not args:
             enabled = is_parallel_enabled()
             p_icon = "🟢" if enabled else "🔴"
@@ -3946,14 +4083,20 @@ def register_handlers(dp):
                 parse_mode='HTML'
             )
         else:
-            await message.reply("Use <code>/parallel on</code> or <code>/parallel off</code>", parse_mode='HTML')
+            await message.reply(
+                "<b>❌  INVALID OPTION</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                "Use <code>/parallel on</code> or <code>/parallel off</code>\n\n"
+                "<code>━━ H@0 ━━</code>",
+                parse_mode='HTML'
+            )
 
-    @dp.message_handler(commands=['genkey'])
+    @dp.message(Command('genkey'))
     async def cmd_genkey(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
-        args = message.get_args()
+        args = get_command_args(message)
         if not args or not args.strip().isdigit():
             await message.reply(
                 "<b>🔑  GENERATE KEY</b>\n"
@@ -3991,7 +4134,7 @@ def register_handlers(dp):
             parse_mode='HTML'
         )
 
-    @dp.message_handler(commands=['keys'])
+    @dp.message(Command('keys'))
     async def cmd_keys(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
@@ -4034,14 +4177,21 @@ def register_handlers(dp):
             parse_mode='HTML'
         )
 
-    @dp.message_handler(commands=['revokekey'])
+    @dp.message(Command('revokekey'))
     async def cmd_revokekey(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
-        args = message.get_args()
+        args = get_command_args(message)
         if not args:
-            await message.reply("  <code>/revokekey [key]</code>", parse_mode='HTML')
+            await message.reply(
+                "<b>🗑  REVOKE KEY</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                "<code>/revokekey [key]</code>\n\n"
+                "Use /keys to see active keys.\n\n"
+                "<code>━━ H@0 ━━</code>",
+                parse_mode='HTML'
+            )
             return
         key = args.strip()
         if revoke_redeem_key(key):
@@ -4063,15 +4213,20 @@ def register_handlers(dp):
                 parse_mode='HTML'
             )
 
-    @dp.message_handler(commands=['addadmin'])
+    @dp.message(Command('addadmin'))
     async def cmd_addadmin(message: Message):
         if not is_owner(message.from_user.id):
             await message.reply("🔒 Owner only.", parse_mode='HTML')
             return
-        args = message.get_args()
+        args = get_command_args(message)
         if not args:
             await message.reply(
-                "<code>/addadmin [id or @username]</code>",
+                "<b>👤  ADD ADMIN</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                "<code>/addadmin [id or @username]</code>\n"
+                "<code>/addadmin 123456 John</code>\n\n"
+                "Grants full admin access.\n\n"
+                "<code>━━ H@0 ━━</code>",
                 parse_mode='HTML'
             )
             return
@@ -4090,15 +4245,19 @@ def register_handlers(dp):
         else:
             await message.reply(f"❌ {msg}", parse_mode='HTML')
 
-    @dp.message_handler(commands=['removeadmin'])
+    @dp.message(Command('removeadmin'))
     async def cmd_removeadmin(message: Message):
         if not is_owner(message.from_user.id):
             await message.reply("🔒 Owner only.", parse_mode='HTML')
             return
-        args = message.get_args()
+        args = get_command_args(message)
         if not args:
             await message.reply(
-                "<code>/removeadmin [id or @username]</code>",
+                "<b>🗑  REMOVE ADMIN</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                "<code>/removeadmin [id or @username]</code>\n\n"
+                "Use /admins to see the list.\n\n"
+                "<code>━━ H@0 ━━</code>",
                 parse_mode='HTML'
             )
             return
@@ -4113,9 +4272,14 @@ def register_handlers(dp):
                 parse_mode='HTML'
             )
         else:
-            await message.reply("❌ Admin not found.", parse_mode='HTML')
+            await message.reply(
+                "<b>❌  NOT FOUND</b>\n\n"
+                f"<code>{identifier}</code> is not an admin.\n"
+                "Use /admins to see the list.",
+                parse_mode='HTML'
+            )
 
-    @dp.message_handler(commands=['admins'])
+    @dp.message(Command('admins'))
     async def cmd_admins(message: Message):
         if not is_admin(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
@@ -4140,9 +4304,9 @@ def register_handlers(dp):
             parse_mode='HTML'
         )
 
-    @dp.message_handler(commands=['redeem'])
+    @dp.message(Command('redeem'))
     async def cmd_redeem(message: Message):
-        args = message.get_args()
+        args = get_command_args(message)
         if not args:
             await message.reply(
                 "<b>🎫  REDEEM KEY</b>\n"
@@ -4178,12 +4342,12 @@ def register_handlers(dp):
                 parse_mode='HTML'
             )
 
-    @dp.message_handler(commands=['editconfig'])
+    @dp.message(Command('editconfig'))
     async def cmd_editconfig(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
-        args = message.get_args()
+        args = get_command_args(message)
         if not args or not args.strip().split()[0].isdigit():
             await message.reply(
                 "<b>📝  EDIT CONFIG</b>\n"
@@ -4269,12 +4433,12 @@ def register_handlers(dp):
             reply_markup=InlineKeyboardMarkup(inline_keyboard=config_buttons)
         )
 
-    @dp.message_handler(commands=['setconfig'])
+    @dp.message(Command('setconfig'))
     async def cmd_setconfig(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
-        args = message.get_args()
+        args = get_command_args(message)
         if not args:
             await message.reply(
                 "<b>⚙️  SET CONFIG</b>\n"
@@ -4328,9 +4492,9 @@ def register_handlers(dp):
 
         if setting_key == 'randomamt' and cfg_gt == 'stripe':
             enabled = setting_value.lower() in ('on', 'true', '1', 'yes')
-            set_config_setting(cid, "random_amount", enabled)
+            set_config_setting(cid, "random_amount", "true" if enabled else "false")
             if cid == get_active_config_id():
-                set_gate_setting("stripe", "random_amount", enabled)
+                set_gate_setting("stripe", "random_amount", "true" if enabled else "false")
             icon = "🟢 ON" if enabled else "🔴 OFF"
             s = get_config(cid)["settings"]
             min_v = s.get('random_amount_min', '1.00')
@@ -4402,12 +4566,12 @@ def register_handlers(dp):
             parse_mode='HTML'
         )
 
-    @dp.message_handler(commands=['setupconfig'])
+    @dp.message(Command('setupconfig'))
     async def cmd_setupconfig(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
-        args = message.get_args()
+        args = get_command_args(message)
         if not args:
             await message.reply(
                 "<b>⚡  SETUP CONFIG</b>\n"
@@ -4538,12 +4702,12 @@ def register_handlers(dp):
         finally:
             set_active_config(prev_active)
 
-    @dp.message_handler(commands=['fixconfig'])
+    @dp.message(Command('fixconfig'))
     async def cmd_fixconfig(message: Message):
         if not is_authorized(message.from_user.id, message.from_user.username):
             await message.reply("🔒 Access denied.", parse_mode='HTML')
             return
-        args = message.get_args()
+        args = get_command_args(message)
         if not args or not args.strip().isdigit():
             await message.reply(
                 "<b>🔧  FIX CONFIG</b>\n"
@@ -4630,7 +4794,7 @@ def register_handlers(dp):
         finally:
             set_active_config(prev_active)
 
-    @dp.callback_query_handler()
+    @dp.callback_query(lambda c: c.data and not c.data.startswith("autosetup_") and c.data != "dismiss_autosetup")
     async def handle_callbacks(callback: CallbackQuery):
         user_id = callback.from_user.id
         username = callback.from_user.username
@@ -4645,17 +4809,18 @@ def register_handlers(dp):
                 self.bot = cb.bot
                 self.message_id = cb.message.message_id
                 self._text = ""
-            def get_args(self):
-                return ""
+            @property
+            def text(self):
+                return self._text
             async def reply(self, text, **kwargs):
                 await self.bot.send_message(self.chat.id, text, **kwargs)
-            async def reply_document(self, doc, **kwargs):
-                await self.bot.send_document(self.chat.id, doc, **kwargs)
+            async def reply_document(self, document=None, **kwargs):
+                await self.bot.send_document(self.chat.id, document=document, **kwargs)
 
         fake_msg = FakeMessage(callback)
 
         admin_actions = ["start_bot", "stop_bot", "approved", "keys", "proxy", "gateon", "gateoff", "parallel_on", "parallel_off", "masscheck", "mc_stop", "mc_ch_on", "mc_ch_off", "proxy_on", "proxy_off", "scrub_now"]
-        auth_actions = ["panel", "stats", "gate", "bins", "configs", "help", "mycards", "myerrors"]
+        auth_actions = ["panel", "stats", "gate", "bins", "configs", "help", "mycards", "myerrors", "autofix"]
 
         admin_prefixes = ["cfgon_", "cfgoff_", "cfgswitch_"]
         is_admin_prefix = any(data.startswith(p) for p in admin_prefixes)
@@ -4711,6 +4876,8 @@ def register_handlers(dp):
                 "Only active config will be used.",
                 parse_mode='HTML'
             )
+        elif data == "autofix":
+            await cmd_autofix(fake_msg)
         elif data == "mycards":
             await cmd_mycards(fake_msg)
         elif data == "myerrors":
@@ -4837,9 +5004,12 @@ def register_handlers(dp):
             except Exception:
                 await callback.bot.send_message(callback.message.chat.id, "❌ Invalid config ID.", parse_mode='HTML')
 
-    @dp.message_handler(lambda message: message.text and not message.text.startswith('/') and message.text.strip())
+    @dp.message(F.text)
     async def handle_plain_text(message: Message):
         text = message.text.strip()
+
+        if text.startswith('/'):
+            return
 
         if '|' in text and any(c.isdigit() for c in text):
             return
@@ -4899,7 +5069,7 @@ def register_handlers(dp):
         except Exception as e:
             logger.debug(f"Auto-detect URL handler error: {e}")
 
-    @dp.callback_query_handler(lambda c: c.data and c.data.startswith("autosetup_"))
+    @dp.callback_query(F.data.startswith("autosetup_"))
     async def cb_autosetup(callback: CallbackQuery):
         if not is_authorized(callback.from_user.id, callback.from_user.username):
             await callback.answer("🔒 Access denied.")
@@ -5006,7 +5176,7 @@ def register_handlers(dp):
                 parse_mode='HTML'
             )
 
-    @dp.callback_query_handler(lambda c: c.data == "dismiss_autosetup")
+    @dp.callback_query(F.data == "dismiss_autosetup")
     async def cb_dismiss_autosetup(callback: CallbackQuery):
         try:
             await callback.message.delete()
@@ -5160,7 +5330,7 @@ async def checking_loop(bot, chat_id, crawler):
                                     if os.path.exists(PHOTO_PATH):
                                         await bot.send_photo(
                                             active_chat,
-                                            photo=InputFile(PHOTO_PATH),
+                                            photo=FSInputFile(PHOTO_PATH),
                                             caption=live_message,
                                             reply_markup=keyboard,
                                             parse_mode='HTML'
@@ -5252,39 +5422,50 @@ async def checking_loop(bot, chat_id, crawler):
 async def main_loop():
     global crawler_instance
 
+    # ── Validate config ──
     BOT_TOKEN = TELEGRAM_BOT_TOKEN
     try:
         CHAT_ID = int(TELEGRAM_CHAT_ID) if TELEGRAM_CHAT_ID else 0
     except ValueError:
         CHAT_ID = 0
 
-    if not BOT_TOKEN or BOT_TOKEN == 'PASTE_YOUR_BOT_TOKEN_HERE' or CHAT_ID == 0:
-        logger.error("Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID — fill them in src/config.py")
+    if not BOT_TOKEN or BOT_TOKEN == 'PASTE_YOUR_BOT_TOKEN_HERE':
+        logger.error("❌ TELEGRAM_BOT_TOKEN not set — add it to config.py")
+        return
+    if CHAT_ID == 0:
+        logger.error("❌ TELEGRAM_CHAT_ID not set — add it to config.py")
         return
 
+    # ── Init bot + dispatcher ──
     bot = Bot(token=BOT_TOKEN)
-    dp = Dispatcher(bot)
+    dp = Dispatcher()
     crawler = CCCrawler()
     crawler_instance = crawler
 
     register_handlers(dp)
+    logger.info("Handlers registered")
 
-    logger.info(f"Running initial proxy scrape + scrub... targeting {TARGET_LIVE} live proxies")
-    await full_scrape_and_scrub()
-    load_proxies()
+    # ── Proxy init ──
+    logger.info(f"Initial proxy scrub... target {TARGET_LIVE} live")
+    try:
+        await full_scrape_and_scrub()
+        load_proxies()
 
-    if is_proxy_enabled() and not has_custom_proxies():
-        retries = 0
-        while get_live_count() < TARGET_LIVE and retries < 5:
-            logger.warning(f"Only {get_live_count()}/{TARGET_LIVE} live proxies - scrubbing more (attempt {retries+1}/5)...")
-            await asyncio.sleep(10)
-            await full_scrape_and_scrub()
-            load_proxies()
-            retries += 1
-        if get_live_count() == 0:
-            logger.warning("No live proxies found after retries - continuing anyway, monitor will refill")
+        if is_proxy_enabled() and not has_custom_proxies():
+            for attempt in range(5):
+                if get_live_count() >= TARGET_LIVE:
+                    break
+                logger.warning(f"Proxy pool low: {get_live_count()}/{TARGET_LIVE} (attempt {attempt+1}/5)")
+                await asyncio.sleep(10)
+                await full_scrape_and_scrub()
+                load_proxies()
+            if get_live_count() == 0:
+                logger.warning("No live proxies — monitor will refill automatically")
+    except Exception as e:
+        logger.error(f"Proxy init error (non-fatal): {e}")
+        load_proxies()
 
-    logger.info(f"Live proxy pool ready: {get_live_count()}/{TARGET_LIVE} proxies available")
+    logger.info(f"Proxy pool ready: {get_live_count()}/{TARGET_LIVE}")
 
     async def _proxy_stats_callback(stats):
         clear_blacklist()
@@ -5339,21 +5520,19 @@ async def main_loop():
         except Exception:
             pass
 
+    # ── Background tasks ──
     asyncio.create_task(auto_scrub_loop(300, _proxy_stats_callback))
-    logger.info("Auto proxy scrub started (every 5min)")
-
     asyncio.create_task(proxy_pool_monitor(check_interval=30, refill_callback=_refill_callback))
-    logger.info(f"Proxy pool monitor started (refill when < {REFILL_THRESHOLD} live, target {TARGET_LIVE})")
+    logger.info(f"Background tasks started (scrub 5min, monitor 30s, refill < {REFILL_THRESHOLD})")
 
+    # ── Startup message ──
     try:
         active_cfg_startup = get_config(get_active_config_id()) or {}
-        startup_gt = active_cfg_startup.get("gate_type", "stripe").upper()
-        gate_icon = "🟢" if active_cfg_startup.get("enabled", False) else "🔴"
-        gate_label = "ON" if active_cfg_startup.get("enabled", False) else "OFF"
         ns = get_all_notify()
         n_live = "🟢" if ns['live'] else "🔴"
         n_dec = "🟢" if ns['decline'] else "🔴"
         n_err = "🟢" if ns['errors'] else "🔴"
+
         all_cfgs = get_all_configs()
         cfg_lines = ""
         for cid_s, cfg_s in all_cfgs.items():
@@ -5362,6 +5541,9 @@ async def main_loop():
             site_s = cfg_s.get("settings", {}).get("site_url", "Not set")[:35]
             cfg_lines += f"  #{cid_s} {en_s} {gt_s} · <code>{site_s}</code>\n"
 
+        proxy_icon = "🟢" if is_proxy_enabled() else "🔴"
+        proxy_src = "custom" if has_custom_proxies() else "live"
+
         startup_msg = (
             f"🚀 <b>H@0 CHECKER V6.0</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -5369,56 +5551,59 @@ async def main_loop():
             f"🔥 Mode: Direct 24/7 Auto\n\n"
             f"<b>🛡  GATES</b>\n"
             f"{cfg_lines}\n"
-            f"<b>🤖  AUTO FEATURES</b>\n"
-            f"🔍 Gate type auto-detect\n"
-            f"🔑 PK/Token auto-detect\n"
-            f"🌐 Proxy auto-scrub (5min)\n"
-            f"📊 Auto-refill below {REFILL_THRESHOLD} → {TARGET_LIVE}\n"
-            f"🧠 LSTM card gen (auto-retrain)\n"
-            f"🛡 Ban guard (3-strike)\n\n"
             f"<b>📊  STATUS</b>\n"
-            f"🌐 <code>{get_pool_size()}</code> {'custom' if has_custom_proxies() else 'live'} proxies {'🟢' if is_proxy_enabled() else '🔴'}\n"
+            f"🌐 <code>{get_pool_size()}</code> {proxy_src} proxies {proxy_icon}\n"
             f"📋 <code>{len(crawler.bins)}</code> BINs · 📂 <code>{len(crawler.cc_list)}</code> test cards\n"
             f"🔀 Parallel {'🟢' if is_parallel_enabled() else '🔴'}\n"
             f"🔔 {n_live} Live  {n_dec} Decline  {n_err} Errors\n\n"
-            f"📖 /help · /setupgate [url]\n\n"
+            f"<b>⚡  QUICK START</b>\n"
+            f"<code>/setupgate [url]</code> — auto-setup\n"
+            f"<code>/chk CC|MM|YY|CVV</code> — test card\n"
+            f"<code>/start</code> — begin checking\n"
+            f"<code>/help</code> — all commands\n\n"
             f"<code>━━ H@0 V6.0 ━━</code>"
         )
-        await bot.send_message(get_active_chat_id(), startup_msg, parse_mode='HTML')
-        logger.info("Startup message sent to channel")
+        await bot.send_message(get_active_chat_id(), startup_msg, parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🎛 Panel", callback_data="panel"),
+                 InlineKeyboardButton(text="📖 Help", callback_data="help")],
+                [InlineKeyboardButton(text="▶️ Start", callback_data="start_bot"),
+                 InlineKeyboardButton(text="🛡 Gate", callback_data="gate")]
+            ])
+        )
+        logger.info("Startup message sent")
     except Exception as e:
         logger.error(f"Startup message failed: {e}")
 
+    # ── Start checker + polling ──
     asyncio.create_task(checking_loop(bot, get_active_chat_id(), crawler))
-    logger.info("Checking loop started as background task")
+    logger.info("Checking loop started")
 
-    logger.info("Clearing old sessions before polling...")
     try:
         await bot.delete_webhook(drop_pending_updates=True)
-        logger.info("Webhook cleared, pending updates dropped")
+        logger.info("Webhook cleared")
     except Exception as e:
         logger.warning(f"Webhook clear failed (non-fatal): {e}")
 
-    await asyncio.sleep(3)
+    await asyncio.sleep(2)
 
-    logger.info("Starting Telegram command polling...")
-    max_poll_retries = 10
-    for poll_attempt in range(max_poll_retries):
+    logger.info("Starting polling...")
+    for attempt in range(10):
         try:
-            await dp.start_polling(reset_webhook=True, timeout=30, relax=0.5)
+            await dp.start_polling(bot)
             break
         except Exception as e:
             err_str = str(e).lower()
-            if "terminated by other" in err_str and poll_attempt < max_poll_retries - 1:
-                wait = min((poll_attempt + 1) * 3, 15)
-                logger.warning(f"Polling conflict (attempt {poll_attempt+1}/{max_poll_retries}) - another bot instance active, retrying in {wait}s...")
+            if "terminated by other" in err_str and attempt < 9:
+                wait = min((attempt + 1) * 3, 15)
+                logger.warning(f"Polling conflict ({attempt+1}/10) — retrying in {wait}s...")
                 try:
                     await bot.delete_webhook(drop_pending_updates=True)
                 except Exception:
                     pass
                 await asyncio.sleep(wait)
             else:
-                logger.error(f"Polling error: {e}")
+                logger.error(f"Polling failed: {e}")
                 break
 
 
@@ -5427,4 +5612,4 @@ if __name__ == '__main__':
     try:
         asyncio.run(main_loop())
     except KeyboardInterrupt:
-        logger.info("Bot stopped manually.")
+        logger.info("Bot stopped.")

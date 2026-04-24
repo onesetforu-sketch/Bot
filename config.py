@@ -42,10 +42,10 @@ _DEFAULT_GATE = {
     "pub_key": "",
     "stripe_account": "",
     "donation_amount": "1.00",
-    "random_amount": False,
+    "random_amount": "false",
     "random_amount_min": "1.00",
     "random_amount_max": "5.00",
-    "hybrid_mode": False,
+    "hybrid_mode": "false",
 }
 
 _DEFAULT_BRAINTREE_GATE = {
@@ -54,7 +54,7 @@ _DEFAULT_BRAINTREE_GATE = {
     "checkout_path": "/checkout/onepage",
     "product_payload": "",
     "payment_method_id": "3",
-    "hybrid_mode": False,
+    "hybrid_mode": "false",
 }
 
 GATE_SETTINGS = {
@@ -461,8 +461,33 @@ def extract_url_from_text(text):
     return None, text
 
 
+def parse_card_input(raw: str) -> str:
+    """Normalize card input to CC|MM|YY|CVV format.
+    Accepts separators: | / : , space."""
+    s = raw.strip()
+    if '|' in s:
+        return s.replace(' ', '')
+    for sep in ['/', ':', ',']:
+        parts = [p.strip() for p in s.split(sep) if p.strip()]
+        if len(parts) == 4:
+            return '|'.join(parts)
+    # Space: handle "CC MM YY CVV" and "4111 1111 1111 1111 12 25 123"
+    parts = s.split()
+    if len(parts) == 4:
+        return '|'.join(parts)
+    if len(parts) >= 5:
+        for n in range(1, len(parts) - 2):
+            cc = ''.join(parts[:n])
+            if cc.isdigit() and 13 <= len(cc) <= 19 and len(parts) - n >= 3:
+                return f"{cc}|{'|'.join(parts[n:n+3])}"
+    return s.replace(' ', '')
+
+
 def get_gate_setting(gate_name, key, default=""):
-    return GATE_SETTINGS.get(gate_name, {}).get(key, default)
+    val = GATE_SETTINGS.get(gate_name, {}).get(key, default)
+    if isinstance(val, bool):
+        return str(val).lower()
+    return val
 
 
 def set_gate_setting(gate_name, key, value):
