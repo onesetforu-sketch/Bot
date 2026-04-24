@@ -1636,7 +1636,7 @@ def _do_braintree_check(s, cc, mes, ano, cvv, site_url, add_to_cart_path, checko
 
 
 def setup_braintree_from_url(full_url):
-    from config import set_gate_setting as _set_gs, get_all_gate_settings
+    from config import set_gate_setting as _set_gs, get_all_gate_settings, normalize_url
 
     results = {
         "success": False,
@@ -1651,9 +1651,14 @@ def setup_braintree_from_url(full_url):
 
     old_settings = get_all_gate_settings("braintree")
 
-    full_url = full_url.strip()
-    if not full_url.startswith("http"):
-        full_url = f"https://{full_url}"
+    normalized, url_err = normalize_url(full_url)
+    if url_err:
+        full_url = full_url.strip()
+        if not full_url.startswith("http"):
+            full_url = f"https://{full_url}"
+        results["errors"].append(f"URL warning: {url_err}")
+    else:
+        full_url = normalized
 
     parsed = urlparse(full_url)
     site_url = f"{parsed.scheme}://{parsed.netloc}"
@@ -1679,20 +1684,32 @@ def setup_braintree_from_url(full_url):
         cart_patterns = [
             (r'action=["\']([^"\']*(?:cart|basket|orders)[^"\']*(?:add|populate|create)[^"\']*)["\']', "form action"),
             (r'["\']([/][^"\']*(?:orders/populate|cart/add|add.to.cart|basket/add)[^"\']*)["\']', "JS/link"),
-            (r'["\']([/][^"\']*(?:populate|add_item|add_to_cart)[^"\']*)["\']', "endpoint"),
+            (r'["\']([/][^"\']*(?:populate|add_item|add_to_cart|addtocart)[^"\']*)["\']', "endpoint"),
+            (r'data-add-to-cart-url=["\']([^"\']+)["\']', "data attr"),
+            (r'fetch\(["\']([^"\']*(?:cart|basket|orders)[^"\']*add[^"\']*)["\']', "fetch call"),
+            (r'\.post\(["\']([^"\']*(?:cart|basket|orders)[^"\']*(?:add|populate)[^"\']*)["\']', "ajax call"),
         ]
         cart_path = ""
         for pat, src in cart_patterns:
             m = re.search(pat, home_html, re.IGNORECASE)
             if m:
                 cart_path = m.group(1)
+                if cart_path.startswith("http"):
+                    try:
+                        cart_path = urlparse(cart_path).path
+                    except Exception:
+                        pass
                 if not cart_path.startswith("/"):
                     cart_path = "/" + cart_path
                 results["auto_detected"].append(f"Cart path: {cart_path} ({src})")
                 break
 
         if not cart_path:
-            common_carts = ["/orders/populate", "/cart/add", "/cart", "/basket/add"]
+            common_carts = [
+                "/orders/populate", "/cart/add", "/cart", "/basket/add",
+                "/api/cart/add", "/shop/cart/add", "/store/cart/add",
+                "/cart/add.js", "/cart/add.json",
+            ]
             for cp in common_carts:
                 try:
                     test = s.get(f"{site_url}{cp}", timeout=8, allow_redirects=True)
@@ -1710,23 +1727,34 @@ def setup_braintree_from_url(full_url):
             results["auto_detected"].append(f"Cart path: {new_settings['add_to_cart_path']} (default)")
 
         checkout_patterns = [
-            (r'["\']([/][^"\']*(?:checkout/onepage|checkout|pay)[^"\']*)["\']', "JS/link"),
+            (r'["\']([/][^"\']*(?:checkout/onepage|checkout|pay|payment)[^"\']*)["\']', "JS/link"),
             (r'href=["\']([^"\']*checkout[^"\']*)["\']', "link"),
+            (r'href=["\']([^"\']*pay(?:ment)?[^"\']*)["\']', "pay link"),
+            (r'action=["\']([^"\']*checkout[^"\']*)["\']', "form action"),
+            (r'data-checkout-url=["\']([^"\']+)["\']', "data attr"),
         ]
         checkout_path = ""
         for pat, src in checkout_patterns:
             m = re.search(pat, home_html, re.IGNORECASE)
             if m:
                 found = m.group(1)
+                if found.startswith("http"):
+                    try:
+                        found = urlparse(found).path
+                    except Exception:
+                        pass
                 if not found.startswith("/"):
                     found = "/" + found
-                if "checkout" in found.lower():
+                if any(kw in found.lower() for kw in ("checkout", "pay", "onepage")):
                     checkout_path = found
                     results["auto_detected"].append(f"Checkout path: {checkout_path} ({src})")
                     break
 
         if not checkout_path:
-            common_checkouts = ["/checkout/onepage", "/checkout", "/pay", "/payment"]
+            common_checkouts = [
+                "/checkout/onepage", "/checkout", "/pay", "/payment",
+                "/checkout/payment", "/store/checkout", "/shop/checkout",
+            ]
             for cp in common_checkouts:
                 try:
                     test = s.get(f"{site_url}{cp}", timeout=8, allow_redirects=True)
@@ -1749,8 +1777,15 @@ def setup_braintree_from_url(full_url):
             results["auto_detected"].append("Braintree token: found in homepage")
 
         if not bt_token:
-            check_pages = [checkout_path or "/checkout", "/checkout/onepage", "/payment"]
+            check_pages = [
+                checkout_path or "/checkout", "/checkout/onepage", "/payment",
+                "/checkout/payment", "/pay", "/store/checkout",
+            ]
+            seen = set()
             for pg in check_pages:
+                if pg in seen:
+                    continue
+                seen.add(pg)
                 try:
                     pg_r = s.get(f"{site_url}{pg}", timeout=10, allow_redirects=True)
                     bt_token = _extract_bt_token(pg_r.text)
@@ -1765,6 +1800,9 @@ def setup_braintree_from_url(full_url):
             r'"payment_method_id"\s*:\s*"?(\d+)"?',
             r'payment_method_id["\s:]+(\d+)',
             r'"paymentMethodId"\s*:\s*"?(\d+)"?',
+            r'payment_method["\s:]+["\']?(\d+)',
+            r'data-payment-method=["\'](\d+)',
+            r'name=["\']payment_method_id["\'][^>]*value=["\'](\d+)',
         ]
         pm_id = ""
         for pat in pm_patterns:
@@ -1785,6 +1823,11 @@ def setup_braintree_from_url(full_url):
             r'"variantId"\s*:\s*(\d+)',
             r'data-variant-id=["\'](\d+)["\']',
             r'"id"\s*:\s*(\d+)[^}]*"product_id"',
+            r'data-product-id=["\'](\d+)',
+            r'"product_id"\s*:\s*(\d+)',
+            r'"sku_id"\s*:\s*(\d+)',
+            r'data-sku=["\'](\d+)',
+            r'"variant"\s*:\s*\{[^}]*"id"\s*:\s*(\d+)',
         ]
         for pat in product_patterns:
             m = re.search(pat, home_html)
@@ -1794,11 +1837,14 @@ def setup_braintree_from_url(full_url):
                 results["auto_detected"].append(f"Product variant: {vid}")
                 break
 
+        html_lower = home_html.lower()
         has_braintree = (
-            'braintree' in home_html.lower()
+            'braintree' in html_lower
             or bt_token is not None
-            or 'braintree-api' in home_html.lower()
-            or 'braintree.js' in home_html.lower()
+            or 'braintree-api' in html_lower
+            or 'braintree.js' in html_lower
+            or 'braintreegateway' in html_lower
+            or 'braintree-web' in html_lower
         )
 
         if has_braintree:
@@ -1807,7 +1853,7 @@ def setup_braintree_from_url(full_url):
                 _set_gs("braintree", k, v)
             results["auto_detected"].append("Braintree integration: confirmed")
         else:
-            results["errors"].append("No Braintree integration detected on this site")
+            results["errors"].append("No Braintree integration detected — settings applied anyway")
             results["success"] = True
             for k, v in new_settings.items():
                 _set_gs("braintree", k, v)
