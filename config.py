@@ -461,6 +461,19 @@ def extract_url_from_text(text):
     return None, text
 
 
+def parse_card_input(raw: str) -> str:
+    """Normalize card input to CC|MM|YY|CVV format.
+    Accepts separators: | / : , space dash."""
+    s = raw.strip()
+    if '|' in s:
+        return s.replace(' ', '')
+    for sep in ['/', ':', ',', '-', ' ']:
+        parts = [p.strip() for p in s.split(sep) if p.strip()]
+        if len(parts) >= 4:
+            return '|'.join(parts[:4])
+    return s.replace(' ', '')
+
+
 def get_gate_setting(gate_name, key, default=""):
     return GATE_SETTINGS.get(gate_name, {}).get(key, default)
 
