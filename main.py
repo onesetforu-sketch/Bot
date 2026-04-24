@@ -23,7 +23,7 @@ except ImportError:
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from proxy_scraper import full_scrape_and_scrub, auto_scrub_loop, get_scrub_stats, get_scrubbed_proxies, proxy_pool_monitor, get_live_count, remove_dead_proxy, get_proxy_latency, TARGET_LIVE, REFILL_THRESHOLD, MAX_WORKERS
-from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, ADMIN_CODE, TELEGRAM_ADMIN, STRIPE_PUB_KEY, get_proxy_dict, load_proxies, get_proxy_stats, get_pool_size, blacklist_proxy, clear_blacklist, set_gate_setting, get_all_gate_settings, is_gate_enabled, set_gate_enabled, get_notify, set_notify, get_all_notify, set_custom_chat_id, get_custom_chat_id, is_proxy_enabled, set_proxy_enabled, add_custom_proxy, remove_custom_proxy, get_custom_proxies, clear_custom_proxies, has_custom_proxies, get_config, get_all_configs, get_active_config_id, set_active_config, create_config, duplicate_config, delete_config, enable_config, disable_config, set_config_setting, set_config_name, get_config_stats, update_config_stats, get_enabled_configs, is_parallel_enabled, set_parallel_enabled, config_count, generate_redeem_key, redeem_key, get_all_redeem_keys, revoke_redeem_key, is_user_redeemed, cleanup_expired_keys, add_admin, remove_admin, get_all_admins, is_extra_admin, get_config_gate_type, set_config_gate_type, get_gate_setting, track_user_card, get_user_cards, get_user_card_file, clear_user_cards, get_user_check_count, increment_user_check_count, check_user_card_limit, get_user_limit, set_user_limit, get_all_user_limits, export_config_data, import_config_data
+from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, ADMIN_CODE, TELEGRAM_ADMIN, STRIPE_PUB_KEY, get_proxy_dict, load_proxies, get_proxy_stats, get_pool_size, blacklist_proxy, clear_blacklist, set_gate_setting, get_all_gate_settings, is_gate_enabled, set_gate_enabled, get_notify, set_notify, get_all_notify, set_custom_chat_id, get_custom_chat_id, is_proxy_enabled, set_proxy_enabled, add_custom_proxy, remove_custom_proxy, get_custom_proxies, clear_custom_proxies, has_custom_proxies, get_config, get_all_configs, get_active_config_id, set_active_config, create_config, duplicate_config, delete_config, enable_config, disable_config, set_config_setting, set_config_name, get_config_stats, update_config_stats, get_enabled_configs, is_parallel_enabled, set_parallel_enabled, config_count, generate_redeem_key, redeem_key, get_all_redeem_keys, revoke_redeem_key, is_user_redeemed, cleanup_expired_keys, add_admin, remove_admin, get_all_admins, is_extra_admin, get_config_gate_type, set_config_gate_type, get_gate_setting, track_user_card, get_user_cards, get_user_card_file, clear_user_cards, get_user_check_count, increment_user_check_count, check_user_card_limit, get_user_limit, set_user_limit, get_all_user_limits, export_config_data, import_config_data, normalize_url, extract_url_from_text
 from stripe import get_rate_limiter, diagnose_gate, setup_gate_from_url, detect_gate_type
 from braintree_gate import check_braintree, setup_braintree_from_url
 from smart_gen import init_smart_gen, generate_card_lstm, generate_smart_batch, retrain as retrain_smart_gen
@@ -3023,7 +3023,7 @@ def register_handlers(dp):
             await message.reply(
                 "<b>⚡  QUICK GATE SETUP</b>\n"
                 "━━━━━━━━━━━━━━━━━━━━\n\n"
-                "📌  Just provide <b>site URL</b>\n"
+                "📌  Just provide <b>site URL</b> — any format!\n"
                 "Everything else is auto-detected!\n\n"
                 "<b>🤖  AUTO-DETECTED</b>\n"
                 "🔍  Gate type (Stripe/Braintree)\n"
@@ -3031,21 +3031,45 @@ def register_handlers(dp):
                 "🏷  Account / Payment ID\n"
                 "📋  Campaign / Checkout paths\n"
                 "📄  Donate path / Cart path\n"
+                "🏪  Platform (WooCommerce/Shopify/etc)\n"
                 "🛡  PoW challenge → auto-solve\n\n"
-                "<b>📝  USAGE</b>\n"
+                "<b>📝  USAGE — ALL LINK TYPES WORK</b>\n"
                 "<code>/setupgate https://charity.org</code>\n"
                 "<code>/setupgate https://shop.com</code>\n"
-                "<code>/setupgate example.org/donate/</code>\n\n"
+                "<code>/setupgate example.org/donate/</code>\n"
+                "<code>/setupgate shop.com</code> (bare domain)\n"
+                "<code>/setupgate http://site.com:8080/pay</code>\n\n"
                 "<i>Optionally add PK:</i>\n"
                 "<code>/setupgate https://site.com pk_live_xxx</code>\n\n"
+                "<b>💡  TIP</b>\n"
+                "You can also just paste a URL in chat!\n"
+                "Bot will auto-detect and offer setup.\n\n"
                 "<code>━━ H@0 ━━</code>",
                 parse_mode='HTML'
             )
             return
 
-        parts_args = args.strip().split(None, 1)
-        url_arg = parts_args[0]
-        manual_pk = parts_args[1].strip() if len(parts_args) > 1 else ""
+        raw_input = args.strip()
+        extracted_url, remaining = extract_url_from_text(raw_input)
+        if extracted_url:
+            url_arg = extracted_url
+            manual_pk = ""
+            if remaining:
+                pk_match = re.search(r'(pk_(?:live|test)_[A-Za-z0-9]+)', remaining)
+                if pk_match:
+                    manual_pk = pk_match.group(1)
+                elif remaining.strip():
+                    manual_pk = remaining.strip()
+        else:
+            parts_args = raw_input.split(None, 1)
+            url_arg = parts_args[0]
+            manual_pk = parts_args[1].strip() if len(parts_args) > 1 else ""
+
+        normalized, url_err = normalize_url(url_arg)
+        if url_err:
+            logger.warning(f"URL normalization warning for '{url_arg}': {url_err}")
+        else:
+            url_arg = normalized
 
         await message.reply(
             "<b>🔄  SETTING UP GATE...</b>\n"
@@ -3075,15 +3099,18 @@ def register_handlers(dp):
                 set_gate_setting("stripe", "pub_key", manual_pk)
                 result["auto_detected"].append(f"Manual PK: {manual_pk[:20]}...")
 
+            platform = gate_info.get("platform")
             detected_lines = f"  🔍  Gate: <b>{gate_label}</b> ({confidence} confidence)\n"
+            if platform:
+                detected_lines += f"  🏪  Platform: <b>{platform}</b>\n"
             if signals:
-                detected_lines += f"  📡  Signals: <code>{', '.join(signals[:4])}</code>\n"
+                detected_lines += f"  📡  Signals: <code>{', '.join(signals[:5])}</code>\n"
             for item in result.get("auto_detected", []):
                 detected_lines += f"  ✅  <code>{item}</code>\n"
 
             error_lines = ""
             for err in result.get("errors", []):
-                error_lines += f"  ⚠️  <code>{err[:60]}</code>\n"
+                error_lines += f"  ⚠️  <code>{err[:70]}</code>\n"
 
             setup_buttons = [
                 [InlineKeyboardButton(text="🛡 View Gate", callback_data="gate"),
@@ -4410,12 +4437,18 @@ def register_handlers(dp):
             )
             return
         cid = int(parts[0])
-        url = parts[1].strip()
+        raw_url = parts[1].strip()
         manual_pk = parts[2].strip() if len(parts) > 2 else ""
         cfg = get_config(cid)
         if not cfg:
             await message.reply(f"Config #{cid} not found. Use /configs")
             return
+
+        normalized, url_err = normalize_url(raw_url)
+        url = normalized if not url_err else raw_url
+        if url_err:
+            logger.warning(f"URL normalization warning for config #{cid}: {url_err}")
+
         await message.reply(
             f"<b>🔄  SETTING UP #{cid}...</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -4449,15 +4482,18 @@ def register_handlers(dp):
                 set_config_setting(cid, "pub_key", manual_pk)
                 result["auto_detected"].append(f"Manual PK: {manual_pk[:20]}...")
 
+            platform = gate_info.get("platform")
             detected_lines = f"  🔍  Gate: <b>{gate_label}</b> ({confidence})\n"
+            if platform:
+                detected_lines += f"  🏪  Platform: <b>{platform}</b>\n"
             if signals:
-                detected_lines += f"  📡  Signals: <code>{', '.join(signals[:4])}</code>\n"
+                detected_lines += f"  📡  Signals: <code>{', '.join(signals[:5])}</code>\n"
             for item in result.get("auto_detected", []):
                 detected_lines += f"  ✅  <code>{item}</code>\n"
 
             error_lines = ""
             for err in result.get("errors", []):
-                error_lines += f"  ⚠️  <code>{err[:60]}</code>\n"
+                error_lines += f"  ⚠️  <code>{err[:70]}</code>\n"
 
             if result["success"]:
                 settings = get_all_gate_settings(detected_type)
@@ -4800,6 +4836,182 @@ def register_handlers(dp):
                     await callback.bot.send_message(callback.message.chat.id, f"❌ Config #{cfg_id} not found.", parse_mode='HTML')
             except Exception:
                 await callback.bot.send_message(callback.message.chat.id, "❌ Invalid config ID.", parse_mode='HTML')
+
+    @dp.message_handler(lambda message: message.text and not message.text.startswith('/') and message.text.strip())
+    async def handle_plain_text(message: Message):
+        text = message.text.strip()
+
+        if '|' in text and any(c.isdigit() for c in text):
+            return
+
+        url, remaining = extract_url_from_text(text)
+        if not url:
+            return
+
+        if not is_authorized(message.from_user.id, message.from_user.username):
+            return
+
+        normalized, url_err = normalize_url(url)
+        if url_err:
+            return
+
+        try:
+            loop = asyncio.get_event_loop()
+            gate_info = await loop.run_in_executor(None, detect_gate_type, normalized)
+            confidence = gate_info.get("confidence", "low")
+            detected_type = gate_info.get("gate_type", "stripe")
+            signals = gate_info.get("signals", [])
+            platform = gate_info.get("platform")
+
+            if confidence == "low" and not signals:
+                return
+
+            gate_label = detected_type.upper()
+            conf_emoji = "🟢" if confidence == "high" else ("🟡" if confidence == "medium" else "🔴")
+            signal_str = ", ".join(signals[:4]) if signals else "none"
+            platform_line = f"🏪  Platform: <b>{platform}</b>\n" if platform else ""
+
+            setup_buttons = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text=f"⚡ Setup {gate_label} Gate",
+                    callback_data=f"autosetup_{detected_type}"
+                )],
+                [InlineKeyboardButton(text="❌ Dismiss", callback_data="dismiss_autosetup")],
+            ])
+
+            await message.reply(
+                f"<b>🔗  LINK DETECTED</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"🌐  <code>{normalized[:60]}</code>\n"
+                f"🔍  Gate: <b>{gate_label}</b>\n"
+                f"{conf_emoji}  Confidence: <b>{confidence}</b>\n"
+                f"{platform_line}"
+                f"📡  Signals: <code>{signal_str}</code>\n\n"
+                f"<b>Tap below to auto-configure this gate:</b>\n\n"
+                f"<code>━━ H@0 ━━</code>",
+                parse_mode='HTML',
+                reply_markup=setup_buttons
+            )
+
+            message.__dict__['_detected_url'] = normalized
+            message.__dict__['_detected_gate_type'] = detected_type
+
+        except Exception as e:
+            logger.debug(f"Auto-detect URL handler error: {e}")
+
+    @dp.callback_query_handler(lambda c: c.data and c.data.startswith("autosetup_"))
+    async def cb_autosetup(callback: CallbackQuery):
+        if not is_authorized(callback.from_user.id, callback.from_user.username):
+            await callback.answer("🔒 Access denied.")
+            return
+
+        detected_type = callback.data.split("_", 1)[1]
+
+        orig_text = callback.message.reply_to_message.text if callback.message.reply_to_message else ""
+        url = None
+        if orig_text:
+            url, _ = extract_url_from_text(orig_text)
+        if not url:
+            msg_text = callback.message.text or ""
+            code_match = re.search(r'<code>(https?://[^<]+)</code>', callback.message.html_text or msg_text)
+            if code_match:
+                url = code_match.group(1)
+            else:
+                url, _ = extract_url_from_text(msg_text)
+
+        if not url:
+            await callback.answer("Could not extract URL. Use /setupgate [url] instead.")
+            return
+
+        normalized, _ = normalize_url(url)
+        if normalized:
+            url = normalized
+
+        await callback.answer("Setting up gate...")
+
+        await callback.bot.send_message(
+            callback.message.chat.id,
+            f"<b>🔄  AUTO-SETTING UP GATE...</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"🌐  <code>{url[:60]}</code>\n"
+            f"🔍  Type: <b>{detected_type.upper()}</b>\n"
+            f"⏳  Auto-detecting all settings...\n\n"
+            f"<code>━━ H@0 ━━</code>",
+            parse_mode='HTML'
+        )
+
+        loop = asyncio.get_event_loop()
+        try:
+            if detected_type == "braintree":
+                result = await loop.run_in_executor(None, setup_braintree_from_url, url)
+                gate_label = "BRAINTREE"
+            else:
+                result = await loop.run_in_executor(None, setup_gate_from_url, url)
+                gate_label = "STRIPE"
+
+            detected_lines = ""
+            for item in result.get("auto_detected", []):
+                detected_lines += f"  ✅  <code>{item}</code>\n"
+            error_lines = ""
+            for err in result.get("errors", []):
+                error_lines += f"  ⚠️  <code>{err[:70]}</code>\n"
+
+            if result["success"]:
+                set_gate_enabled(detected_type, True)
+                active_cid = get_active_config_id()
+                set_config_gate_type(active_cid, detected_type)
+                settings = get_all_gate_settings(detected_type)
+                for k, v in settings.items():
+                    set_config_setting(active_cid, k, v)
+                enable_config(active_cid)
+
+                await callback.bot.send_message(
+                    callback.message.chat.id,
+                    f"<b>✅  {gate_label} GATE READY!</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                    f"<b>🤖  AUTO DETECTED</b>\n"
+                    f"{detected_lines}\n"
+                    + (f"\n<b>⚠️  WARNINGS</b>\n{error_lines}\n" if error_lines else "")
+                    + f"  🟢  {gate_label} gate enabled & ready!\n\n"
+                    f"<b>💡  NEXT STEPS</b>\n"
+                    f"  • Use <code>/chk CC|MM|YY|CVV</code> to test\n"
+                    f"  • Use <code>/gate</code> to view config\n\n"
+                    f"<code>━━ H@0 ━━</code>",
+                    parse_mode='HTML',
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="🛡 View Gate", callback_data="gate"),
+                         InlineKeyboardButton(text="🎛 Panel", callback_data="panel")]
+                    ])
+                )
+            else:
+                await callback.bot.send_message(
+                    callback.message.chat.id,
+                    f"<b>⚠️  SETUP PARTIAL</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                    + (f"<b>DETECTED</b>\n{detected_lines}\n" if detected_lines else "")
+                    + f"\n<b>ERRORS</b>\n{error_lines}\n"
+                    f"Use <code>/setupgate {url[:40]}</code> or <code>/setgate</code>\n\n"
+                    f"<code>━━ H@0 ━━</code>",
+                    parse_mode='HTML'
+                )
+
+        except Exception as e:
+            logger.error(f"Auto-setup gate error: {e}")
+            await callback.bot.send_message(
+                callback.message.chat.id,
+                f"<b>❌  SETUP FAILED</b>\n━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"<code>{str(e)[:60]}</code>\n\n"
+                f"Try: <code>/setupgate {url[:40]}</code>\n\n"
+                f"<code>━━ H@0 ━━</code>",
+                parse_mode='HTML'
+            )
+
+    @dp.callback_query_handler(lambda c: c.data == "dismiss_autosetup")
+    async def cb_dismiss_autosetup(callback: CallbackQuery):
+        try:
+            await callback.message.delete()
+        except Exception:
+            await callback.answer("Dismissed.")
 
 
 def get_active_chat_id():

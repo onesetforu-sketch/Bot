@@ -5,6 +5,8 @@ import logging
 import time
 import string
 import copy
+import re
+from urllib.parse import urlparse, urlunparse, unquote, parse_qs, urlencode
 from faker import Faker
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -352,6 +354,111 @@ _USER_AGENTS = [
 
 def get_random_ua():
     return random.choice(_USER_AGENTS)
+
+
+def normalize_url(raw_url):
+    """Normalize any kind of URL/link input into a clean, usable URL.
+
+    Handles: bare domains, missing scheme, trailing slashes, fragments,
+    query params, encoded characters, Telegram-mangled links, markdown
+    links, HTML href, whitespace, angle brackets, parentheses wrapping.
+    Returns (normalized_url, error_string_or_None).
+    """
+    if not raw_url or not raw_url.strip():
+        return "", "Empty URL"
+
+    url = raw_url.strip()
+
+    url = re.sub(r'^<|>$', '', url)
+    url = re.sub(r'^\(|\)$', '', url)
+    url = re.sub(r'[\[\]]', '', url)
+
+    md_match = re.match(r'\[.*?\]\((https?://[^\s)]+)\)', url)
+    if md_match:
+        url = md_match.group(1)
+
+    href_match = re.search(r'href=["\']([^"\']+)["\']', url, re.IGNORECASE)
+    if href_match:
+        url = href_match.group(1)
+
+    url = url.split()[0]
+
+    url = url.rstrip('.,;:!?')
+
+    url = unquote(url)
+
+    if not re.match(r'^https?://', url, re.IGNORECASE):
+        if url.startswith('//'):
+            url = f"https:{url}"
+        elif re.match(r'^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.', url):
+            url = f"https://{url}"
+        else:
+            return "", f"Cannot parse URL: {raw_url[:60]}"
+
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return "", f"Malformed URL: {raw_url[:60]}"
+
+    scheme = parsed.scheme.lower()
+    if scheme not in ('http', 'https'):
+        return "", f"Unsupported scheme: {scheme}"
+
+    netloc = parsed.netloc.lower().strip('.')
+    if not netloc:
+        return "", f"No domain found in: {raw_url[:60]}"
+
+    if ':' in netloc:
+        host, port_str = netloc.rsplit(':', 1)
+        try:
+            port = int(port_str)
+            if (scheme == 'http' and port == 80) or (scheme == 'https' and port == 443):
+                netloc = host
+        except ValueError:
+            return "", f"Invalid port in URL: {raw_url[:60]}"
+
+    if not re.match(r'^[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:\d+)?$', netloc):
+        return "", f"Invalid domain: {netloc}"
+
+    path = parsed.path
+    if not path:
+        path = '/'
+
+    clean = urlunparse((scheme, netloc, path, '', '', ''))
+    return clean, None
+
+
+def extract_url_from_text(text):
+    """Extract the first URL from free-form text (message, markdown, etc).
+    Returns (url, remaining_text) or (None, original_text).
+    """
+    if not text:
+        return None, text
+
+    url_pattern = re.compile(
+        r'(https?://[^\s<>\[\](){},;"\'`]+)',
+        re.IGNORECASE
+    )
+    m = url_pattern.search(text)
+    if m:
+        raw = m.group(1).rstrip('.,;:!?)')
+        remaining = (text[:m.start()] + text[m.end():]).strip()
+        return raw, remaining
+
+    domain_pattern = re.compile(
+        r'(?<!\S)([a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?'
+        r'\.[a-zA-Z]{2,}(?:\.[a-zA-Z]{2,})?'
+        r'(?:/[^\s<>\[\](){},;"\'`]*)?)',
+        re.IGNORECASE
+    )
+    m = domain_pattern.search(text)
+    if m:
+        candidate = m.group(1).rstrip('.,;:!?)')
+        if '.' in candidate.split('/')[0]:
+            remaining = (text[:m.start()] + text[m.end():]).strip()
+            return candidate, remaining
+
+    return None, text
 
 
 def get_gate_setting(gate_name, key, default=""):

