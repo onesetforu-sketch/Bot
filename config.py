@@ -476,7 +476,7 @@ def parse_card_input(raw: str) -> str:
     if len(parts) == 4:
         return '|'.join(parts)
     if len(parts) >= 5:
-        for n in range(2, len(parts) - 2):
+        for n in range(1, len(parts) - 2):
             cc = ''.join(parts[:n])
             if cc.isdigit() and 13 <= len(cc) <= 19 and len(parts) - n >= 3:
                 return f"{cc}|{'|'.join(parts[n:n+3])}"
